@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 
 let ai: GoogleGenAI | null = null;
@@ -26,7 +25,8 @@ export const getCoachingTip = async (prompt: string): Promise<string> => {
             contents: [{ parts: [{ text: prompt }] }]
         });
         
-        return response.text;
+        // Ensure we always return a string, even if response.text is undefined
+        return response.text || "No advice available.";
 
     } catch (error) {
         console.error("Error fetching coaching tip from Gemini API:", error);
