@@ -1,31 +1,23 @@
 import { GoogleGenAI } from "@google/genai";
 
-let ai: GoogleGenAI | null = null;
-
-const getAi = () => {
-    if (!ai) {
-        if (process.env.API_KEY) {
-            ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        } else {
-            console.error("API_KEY environment variable not set.");
-        }
-    }
-    return ai;
-};
-
 export const getCoachingTip = async (prompt: string): Promise<string> => {
-    const genAI = getAi();
-    if (!genAI) {
+    // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
+    // Create a new GoogleGenAI instance right before making an API call.
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
         return "Gemini API key not configured. Please set the API_KEY environment variable.";
     }
 
+    const ai = new GoogleGenAI({ apiKey });
+
     try {
-        const response = await genAI.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: [{ parts: [{ text: prompt }] }]
+        // Use 'gemini-3-flash-preview' for basic text tasks (coaching tips)
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: prompt
         });
         
-        // Ensure we always return a string, even if response.text is undefined
+        // Directly access the .text property of the GenerateContentResponse object.
         return response.text || "No advice available.";
 
     } catch (error) {

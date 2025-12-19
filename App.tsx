@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { View, GameMode, LocalData, Settings, GameState, Run, TimingLogEntry, FingeringDataItem, ChatMessage, ProfileSettings } from './types';
-import { STORAGE_KEY, MAX_ENTRIES, ALPHABET, FINGERING_DATA, TONY_GROUPS_ROW1, TONY_GROUPS_ROW2, INITIAL_GAME_STATE, DEFAULT_LOCAL_DATA, DEFAULT_SETTINGS } from './constants';
+import { STORAGE_KEY, MAX_ENTRIES, ALPHABET, FINGERING_DATA, TONY_GROUPS_ROW1, TONY_GROUPS_ROW2, INITIAL_GAME_STATE, DEFAULT_LOCAL_DATA, DEFAULT_SETTINGS, getTargetSequence } from './constants';
 import { getCoachingTip } from './services/geminiService';
 
 // --- AUDIO UTILS ---
@@ -56,11 +56,13 @@ const LetterBox: React.FC<LetterBoxProps> = React.memo(({ data, index, currentIn
         boxClass = "letter-box bg-blue-500 border-blue-600 text-white scale-110 shadow-lg z-10";
     }
 
+    const displayChar = data.char === ' ' ? '␣' : data.char.toUpperCase();
+
     return (
         <div id={`letter-${index}`} className={boxClass}>
-            <span className="letter-box-content">{data.char.toUpperCase()}</span>
+            <span className="letter-box-content">{displayChar}</span>
             {showFingering && (
-                <div className={`fingering-badge ${data.code.startsWith('L') ? 'fingering-L' : 'fingering-R'}`}>
+                <div className={`fingering-badge ${data.code.startsWith('L') ? 'fingering-L' : (data.code.startsWith('R') ? 'fingering-R' : 'bg-slate-500 text-white')}`}>
                     {data.code}
                 </div>
             )}
@@ -100,13 +102,15 @@ const App: React.FC = () => {
     const runNoteRef = useRef<HTMLTextAreaElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
 
+    // --- TARGET SEQUENCE ---
+    const targetSequence = useMemo(() => getTargetSequence(settings.mode), [settings.mode]);
+
     // --- DATA & SETTINGS PERSISTENCE ---
     useEffect(() => {
         try {
             const storedData = localStorage.getItem(STORAGE_KEY);
             if (storedData) {
                 const parsed = JSON.parse(storedData);
-                // Basic migration for profile settings and new sound setting
                 if (parsed.localData && !parsed.localData.profileSettings) {
                     const newProfileSettings: { [key: string]: ProfileSettings } = {};
                     parsed.localData.profiles.forEach((p: string) => {
@@ -191,7 +195,7 @@ const App: React.FC = () => {
             initialState = {
                 ...initialState,
                 index: 1,
-                timingLog: [{ char: 'a', duration: 0, total: 0, prev: '' }]
+                timingLog: [{ char: targetSequence[0], duration: 0, total: 0, prev: '' }]
             };
         }
         
@@ -200,7 +204,7 @@ const App: React.FC = () => {
         timerIntervalRef.current = window.setInterval(() => {
             setCurrentTime((performance.now() - now) / 1000);
         }, 30);
-    }, [settings.sound]);
+    }, [settings.sound, targetSequence]);
 
 
     const startGameSequence = useCallback(async () => {
@@ -212,23 +216,16 @@ const App: React.FC = () => {
             await new Promise(r => setTimeout(r, 1000));
         }
         
-        // --- Critical Section ---
-        // 1. Start the run logic and timer immediately.
-        //    This sets gameState.started = true
-        beginRun(false); // Pass false so it doesn't process 'a' automatically
-        
-        // 2. Update UI to show "GO!" and make sounds
+        beginRun(false);
         setCountdown("GO!");
         speak("GO!", settings.sound, settings.voice);
         playSound('count', settings.sound);
-        
-        // 3. Clear the "GO!" message after a bit
         setTimeout(() => setCountdown(null), 400);
     }, [beginRun, settings.sound, settings.voice]);
 
     const generatePostRunAnalysis = (run: Run, history: Run[]): string[] => {
         const analysis: string[] = [];
-        const relevantHistory = history.filter(r => r.profile === run.profile && r.device === run.device);
+        const relevantHistory = history.filter(r => r.profile === run.profile && r.device === run.device && r.mode === run.mode);
         const times = relevantHistory.map(r => r.time).sort((a,b) => a - b);
         
         const rank = times.findIndex(t => run.time <= t);
@@ -245,8 +242,8 @@ const App: React.FC = () => {
             const sortedLog = [...run.log].slice(1).sort((a,b) => b.duration - a.duration);
             const slowest = sortedLog[0];
             const fastest = sortedLog[sortedLog.length - 1];
-            analysis.push(`🐌 Slowest: ${slowest.prev.toUpperCase()} → ${slowest.char.toUpperCase()} (${slowest.duration.toFixed(3)}s)`);
-            analysis.push(`⚡️ Fastest: ${fastest.prev.toUpperCase()} → ${fastest.char.toUpperCase()} (${fastest.duration.toFixed(3)}s)`);
+            analysis.push(`🐌 Slowest: ${slowest.prev === ' ' ? 'Space' : slowest.prev.toUpperCase()} → ${slowest.char === ' ' ? 'Space' : slowest.char.toUpperCase()} (${slowest.duration.toFixed(3)}s)`);
+            analysis.push(`⚡️ Fastest: ${fastest.prev === ' ' ? 'Space' : fastest.prev.toUpperCase()} → ${fastest.char === ' ' ? 'Space' : fastest.char.toUpperCase()} (${fastest.duration.toFixed(3)}s)`);
         }
         
         return analysis;
@@ -265,7 +262,7 @@ const App: React.FC = () => {
             profile: localData.currentProfile,
             device: localData.currentDevice,
             blind: settings.blind,
-            note: "", // Note will be added on save
+            note: "", 
             timestamp: Date.now(),
             log: finalLog
         };
@@ -289,7 +286,7 @@ const App: React.FC = () => {
     const saveCurrentRun = useCallback(() => {
         if (!completedRun) return;
         const runToSave = { ...completedRun, note: runNote };
-        setLocalData(d => ({...d, history: [runToSave, ...d.history].slice(0, 100)}));
+        setLocalData(d => ({...d, history: [runToSave, ...d.history].slice(0, 1000)}));
     }, [completedRun, runNote]);
 
     const handleKeydown = useCallback((e: KeyboardEvent) => {
@@ -299,35 +296,32 @@ const App: React.FC = () => {
 
         if (e.key === 'Enter') {
             e.preventDefault();
-            // If a run is in progress, enter quits it.
-            // If a run is not started or is finished, enter resets for a new one.
             resetGame();
             return;
         }
         
-        if (gameState.finished) return; // Prevent typing after Z
+        if (gameState.finished) return; 
 
-        // Block input only during the 3, 2, 1 part, but allow it on GO!
         if (countdown && countdown !== "GO!") return;
         
-        if (settings.mode === 'blank') return; // Blank mode uses its own handler
+        if (settings.mode === 'blank') return; 
 
-        if (!/^[a-z]$/.test(key)) return;
+        if (!/^[a-z ]$/.test(key)) return;
 
         e.preventDefault();
 
         if (!gameState.started) {
-            if (key === 'a') {
+            if (key === targetSequence[0]) {
                 if (settings.mode === 'guinness') {
                     startGameSequence();
                 } else {
-                    beginRun(true); // Start and process 'a' immediately
+                    beginRun(true);
                 }
             }
             return;
         }
 
-        const target = FINGERING_DATA[gameState.index].char;
+        const target = targetSequence[gameState.index];
         if (key === target) {
             playSound('type', settings.sound);
             const now = performance.now();
@@ -338,7 +332,7 @@ const App: React.FC = () => {
                 char: target,
                 duration,
                 total,
-                prev: gameState.index > 0 ? FINGERING_DATA[gameState.index - 1].char : ''
+                prev: gameState.index > 0 ? targetSequence[gameState.index - 1] : ''
             };
 
             const nextIndex = gameState.index + 1;
@@ -351,28 +345,29 @@ const App: React.FC = () => {
                 timingLog: newLog
             }));
 
-            if (nextIndex >= FINGERING_DATA.length) {
+            if (nextIndex >= targetSequence.length) {
                 endGame(total, newLog);
             }
         } else {
             playSound('error', settings.sound);
             setGameState(gs => ({...gs, mistakes: gs.mistakes + 1}));
             setIsError(true);
-            setTimeout(() => setIsError(false), 300); // Reset after animation
+            setTimeout(() => setIsError(false), 300);
         }
     }, [
-        gameState, settings, localData,
+        gameState, settings, localData, targetSequence,
         countdown, managementModalOpen, resultsModalOpen,
         beginRun, endGame, resetGame, startGameSequence
     ]);
     
     const handleBlankInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const value = e.target.value.toLowerCase();
-
         if (gameState.finished) return;
 
+        const expectedFull = targetSequence.join('');
+
         if (!gameState.started) {
-            if (value.startsWith('a')) {
+            if (value.startsWith(targetSequence[0])) {
                 beginRun(true);
             } else {
                 e.target.value = '';
@@ -383,9 +378,9 @@ const App: React.FC = () => {
         const lastTypedChar = value.slice(-1);
         const currentIndex = value.length - 1;
 
-        if (currentIndex >= ALPHABET.length) return;
+        if (currentIndex >= targetSequence.length) return;
 
-        const expectedChar = ALPHABET[currentIndex];
+        const expectedChar = targetSequence[currentIndex];
 
         if(lastTypedChar === expectedChar) {
              playSound('type', settings.sound);
@@ -397,7 +392,7 @@ const App: React.FC = () => {
                  char: expectedChar,
                  duration,
                  total,
-                 prev: currentIndex > 0 ? ALPHABET[currentIndex - 1] : ''
+                 prev: currentIndex > 0 ? targetSequence[currentIndex - 1] : ''
              };
              
              const newLog = [...gameState.timingLog, newLogEntry];
@@ -409,11 +404,11 @@ const App: React.FC = () => {
                  timingLog: newLog
              }));
 
-             if(value === ALPHABET) {
+             if(value === expectedFull) {
                  endGame(total, newLog);
              }
 
-        } else if (value.length > gameState.index) { // A new mistake was made
+        } else if (value.length > gameState.index) {
             playSound('error', settings.sound);
             setGameState(gs => ({...gs, mistakes: gs.mistakes + 1}));
             setIsError(true);
@@ -435,17 +430,17 @@ const App: React.FC = () => {
     // --- UI COMPUTATIONS ---
     const deviceRecord = useMemo(() => {
         const bestTime = localData.history
-            .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice)
+            .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice && r.mode === settings.mode)
             .reduce((min, r) => Math.min(min, r.time), Infinity);
         return bestTime === Infinity ? '--' : bestTime.toFixed(2);
-    }, [localData]);
+    }, [localData, settings.mode]);
     
     const personalBestTime = useMemo(() => {
         const bestTime = localData.history
-            .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice)
+            .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice && r.mode === settings.mode)
             .reduce((min, r) => Math.min(min, r.time), Infinity);
         return bestTime === Infinity ? null : bestTime;
-    }, [localData]);
+    }, [localData, settings.mode]);
 
     const sortedHistory = useMemo(() => {
         return [...localData.history].sort((a, b) => {
@@ -535,36 +530,24 @@ const App: React.FC = () => {
         setChatInput("");
         setIsCoachLoading(true);
 
-        const analyticsData = getAnalyticsData();
-        const slowestLetters = analyticsData.slowest.slice(0, 3).map(
+        const analyticsDataLocal = getAnalyticsData();
+        const slowestLetters = analyticsDataLocal.slowest.slice(0, 3).map(
             row => `${row.key} (${row.avg.toFixed(3)}s)`
         ).join(', ') || "No specific data yet. Suggest general technique.";
 
         const recentRuns = localData.history
             .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice)
             .slice(0, 5)
-            .map(r => `Time: ${r.time.toFixed(2)}s, Mistakes: ${r.mistakes}`)
+            .map(r => `Time: ${r.time.toFixed(2)}s, Mode: ${r.mode}`)
             .join('; ');
         
-        const fullPrompt = `You are an expert A-Z speed-typing coach named 'Coach Gemini'. Your tone must be encouraging, analytical, and highly motivational. You help users break their personal records. Your analysis should be based on the user's performance trends and their slowest letter transitions.
-
-        **User Performance Data:**
-        - **Profile:** ${localData.currentProfile}
-        - **Device:** ${localData.currentDevice}
-        - **Top 3 Slowest Transitions (based on all runs):** ${slowestLetters || "Not enough data yet."}
-        - **Last 5 Runs (most recent first):** ${recentRuns || "No recent runs."}
-
-        **User's Question:**
-        "${msg}"
-
-        **Your Task:**
-        Analyze the provided data in the context of the user's question. Provide a response formatted with markdown using the following structure:
-
-        1.  **🚀 Quick Answer:** Start with a direct and encouraging answer to their question. Keep it brief.
-        2.  **📊 Data Insight:** Provide one specific, interesting insight based on their performance data. Look for trends in recent runs or connect a slow transition to their question. For example, "I noticed your times are getting more consistent, which is great! That 'Y → Z' transition is still a bit of a hurdle, though."
-        3.  **💡 Actionable Tip:** Give one concrete, actionable drill or technique they can practice *right now*. Be very specific. For example, "For the next 5 minutes, let's drill that 'Y-Z' combo. Type 'xyz yzy' over and over. Don't worry about speed, just focus on a smooth, rhythmic motion with your ring and pinky fingers."
-
-        Keep your entire response concise and easy to read. Use contractions and speak like a real coach.`;
+        const fullPrompt = `You are an expert typing coach named 'Coach Gemini'. Help the user improve.
+        Current Profile: ${localData.currentProfile}
+        Device: ${localData.currentDevice}
+        Slowest Transitions: ${slowestLetters}
+        Recent History: ${recentRuns}
+        Question: "${msg}"
+        Response Format: Markdown with 'Quick Answer', 'Data Insight', and 'Actionable Tip'.`;
 
         const responseText = await getCoachingTip(fullPrompt);
         
@@ -594,7 +577,7 @@ const App: React.FC = () => {
         filtered.forEach(r => {
             r.log.forEach(l => {
                 if (l.prev && l.char) {
-                    const key = `${l.prev.toUpperCase()} → ${l.char.toUpperCase()}`;
+                    const key = `${l.prev === ' ' ? 'Space' : l.prev.toUpperCase()} → ${l.char === ' ' ? 'Space' : l.char.toUpperCase()}`;
                     if (!transitions[key]) transitions[key] = [];
                     transitions[key].push(l.duration);
                 }
@@ -619,12 +602,11 @@ const App: React.FC = () => {
         }));
     };
 
-    const analyticsData = useMemo(() => getAnalyticsData(), [getAnalyticsData]);
+    const analyticsDataMemo = useMemo(() => getAnalyticsData(), [getAnalyticsData]);
 
 
     return (
         <>
-        {/* Flash Overlay for Guinness Mode */}
         {flashEffect && <div id="flash-overlay" className="fixed inset-0 z-[100] animate-flash"></div>}
 
         <div className="w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-6 md:p-8 mt-4 border border-slate-200 dark:border-slate-800">
@@ -664,22 +646,22 @@ const App: React.FC = () => {
              {/* Views */}
             <div className={view !== 'practice' ? 'hidden' : ''}>
                 {/* PRACTICE VIEW */}
-                <div className="flex flex-wrap justify-center gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl inline-flex w-full">
-                    {(['classic', 'blank', 'flash', 'guinness'] as GameMode[]).map(m => (
-                        <button key={m} onClick={() => resetGame(m)} className={`flex-1 px-4 py-2 rounded-lg text-sm font-bold transition ${settings.mode === m ? 'bg-white dark:bg-slate-700 shadow text-blue-600 dark:text-blue-300 scale-105' : 'text-slate-500 hover:bg-white/50'}`}>
-                             {m === 'guinness' ? <><span className="capitalize">{m}</span> <span className="text-xs bg-red-500 text-white px-1 rounded">REC</span></> : <span className="capitalize">{m} {m==='blank' ? 'Typing' : m==='flash' ? 'Flash' : 'Grid' }</span>}
+                <div className="flex flex-wrap justify-center gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl inline-flex w-full overflow-x-auto">
+                    {(['classic', 'backwards', 'spaces', 'backwards-spaces', 'blank', 'flash', 'guinness'] as GameMode[]).map(m => (
+                        <button key={m} onClick={() => resetGame(m)} className={`flex-none px-4 py-2 rounded-lg text-[11px] font-bold transition ${settings.mode === m ? 'bg-white dark:bg-slate-700 shadow text-blue-600 dark:text-blue-300 scale-105' : 'text-slate-500 hover:bg-white/50'}`}>
+                             {m.includes('backwards') ? (m.includes('spaces') ? 'Z Y X' : 'Z-A') : m.includes('spaces') ? 'A B C' : <span className="capitalize">{m} {m==='blank' ? 'Typing' : m==='flash' ? 'Flash' : 'Grid' }</span>}
                         </button>
                     ))}
                 </div>
                 
                 <div className="flex flex-wrap justify-center gap-4 mb-8 text-sm">
-                   {['classic', 'guinness'].includes(settings.mode) && 
+                   {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && 
                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                             <input type="checkbox" checked={currentProfileSettings.tonysRhythm} onChange={e => handleProfileSettingChange('tonysRhythm', e.target.checked)} className="accent-blue-500" />
                             <span className="font-semibold text-slate-600 dark:text-slate-300">Tony's Rhythm</span>
                         </label>
                    }
-                   {['classic', 'guinness'].includes(settings.mode) && 
+                   {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && 
                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                             <input type="checkbox" checked={currentProfileSettings.fingering} onChange={e => handleProfileSettingChange('fingering', e.target.checked)} className="accent-blue-500" />
                             <span className="font-semibold text-slate-600 dark:text-slate-300">Show Fingering</span>
@@ -703,12 +685,12 @@ const App: React.FC = () => {
                 
                  <div className="grid grid-cols-3 gap-4 mb-8">
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                        <div className="text-[10px] uppercase font-bold text-slate-400">Device Record</div>
+                        <div className="text-[10px] uppercase font-bold text-slate-400">Mode Record</div>
                         <div className="text-2xl font-black text-blue-500 font-mono">{deviceRecord}</div>
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
                         <div className="text-[10px] uppercase font-bold text-slate-400">Current Time</div>
-                        <div className="text-4xl font-black text-slate-800 dark:text-white font-mono">{gameState.finished ? currentTime.toFixed(2) : currentTime.toFixed(2)}</div>
+                        <div className="text-4xl font-black text-slate-800 dark:text-white font-mono">{currentTime.toFixed(2)}</div>
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
                         <div className="text-[10px] uppercase font-bold text-slate-400">Mistakes</div>
@@ -724,67 +706,42 @@ const App: React.FC = () => {
                     }
 
                     <div className={`w-full flex justify-center items-center transition-all ${settings.blind && settings.mode !== 'blank' ? 'blind-mode' : ''}`}>
-                       {/* GAME CONTENT */}
-                       {settings.mode === 'flash' && <div id="flash-letter" className="text-slate-800 dark:text-white transition-colors duration-100">{FINGERING_DATA[gameState.index]?.char.toUpperCase() || 'A'}</div>}
-                       {settings.mode === 'blank' && <textarea ref={blankInputRef} value={ALPHABET.substring(0, gameState.index)} onChange={handleBlankInputChange} className="w-full h-full p-4 text-2xl font-mono resize-none rounded-lg bg-slate-50 dark:bg-slate-850 text-slate-800 dark:text-white border-2 border-slate-300 dark:border-slate-700 focus:border-blue-500 outline-none" autoCorrect="off" autoCapitalize="off" autoComplete="off" spellCheck="false" rows={10} placeholder="Type the alphabet..." />}
-                       {['classic', 'guinness'].includes(settings.mode) && (
-                           !currentProfileSettings.tonysRhythm ? (
-                                <div className="flex flex-wrap justify-center gap-2 max-w-3xl">
-                                    {FINGERING_DATA.map((item, i) => <LetterBox key={i} data={item} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />)}
-                                </div>
-                           ) : (
-                               <div className="flex flex-col items-center gap-4">
-                                   <div className="flex flex-wrap justify-center gap-6">
-                                       {TONY_GROUPS_ROW1.map((group, gIdx) => (
-                                           <div key={gIdx} className="flex gap-1">
-                                                {group.map(char => {
-                                                    const data = FINGERING_DATA.find(d => d.char === char)!;
-                                                    const i = FINGERING_DATA.findIndex(d => d.char === char);
-                                                    return <LetterBox key={i} data={data} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />
-                                                })}
-                                           </div>
-                                       ))}
-                                   </div>
-                                    <div className="flex flex-wrap justify-center gap-6">
-                                       {TONY_GROUPS_ROW2.map((group, gIdx) => (
-                                           <div key={gIdx} className="flex gap-1">
-                                                {group.map((char: string) => {
-                                                    const data = FINGERING_DATA.find(d => d.char === char)!;
-                                                    const i = FINGERING_DATA.findIndex(d => d.char === char);
-                                                    return <LetterBox key={i} data={data} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />
-                                                })}
-                                           </div>
-                                       ))}
-                                   </div>
-                               </div>
-                           )
+                       {settings.mode === 'flash' && <div id="flash-letter" className="text-slate-800 dark:text-white transition-colors duration-100">{targetSequence[gameState.index]?.toUpperCase() || 'A'}</div>}
+                       {settings.mode === 'blank' && <textarea ref={blankInputRef} value={targetSequence.slice(0, gameState.index).join('')} onChange={handleBlankInputChange} className="w-full h-full p-4 text-2xl font-mono resize-none rounded-lg bg-slate-50 dark:bg-slate-850 text-slate-800 dark:text-white border-2 border-slate-300 dark:border-slate-700 focus:border-blue-500 outline-none" autoCorrect="off" autoCapitalize="off" autoComplete="off" spellCheck="false" rows={5} placeholder="Start typing sequence..." />}
+                       {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && (
+                            <div className="flex flex-wrap justify-center gap-2 max-w-4xl">
+                                {targetSequence.map((char, i) => {
+                                    const data = FINGERING_DATA.find(d => d.char === char) || { char, code: '?' };
+                                    return <LetterBox key={i} data={data} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />
+                                })}
+                            </div>
                        )}
                     </div>
 
                     {!gameState.started && !gameState.finished &&
                         <div className="mt-12 bg-white dark:bg-slate-700 px-6 py-2 rounded-full shadow-lg border border-slate-200 dark:border-slate-600 text-sm font-bold text-blue-600 dark:text-blue-300 animate-bounce">
-                           {settings.mode === 'guinness' ? "Press 'A' to Init Sequence" : settings.mode === 'blank' ? "Start typing the alphabet!" : "Press 'A' to Start (or Enter to Restart)"}
+                           {settings.mode === 'guinness' ? "Press 'A' to Init Sequence" : settings.mode === 'blank' ? `Start typing: ${targetSequence.join('').substring(0, 3)}...` : `Press '${targetSequence[0].toUpperCase()}' to Start (or Enter to Restart)`}
                         </div>
                     }
                 </div>
 
                 <div className="mt-8">
-                    <h2 className="text-xl font-bold mb-4 text-slate-700 dark:text-slate-200">Last Run Breakdown</h2>
+                    <h2 className="text-xl font-bold mb-4 text-slate-700 dark:text-slate-200">Current Run Breakdown</h2>
                     <div className="overflow-y-auto max-h-[300px] bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
                         <table className="w-full text-sm">
                             <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-[10px] uppercase font-bold text-slate-500">
                                 <tr>
                                     <th className="px-3 py-2 text-left">Transition</th>
                                     <th className="px-3 py-2 text-left">Time</th>
-                                    <th className="px-3 py-2 text-left">Total Time</th>
+                                    <th className="px-3 py-2 text-left">Cumulative</th>
                                 </tr>
                             </thead>
                             <tbody>
                                {gameState.timingLog.length === 0 ? 
-                                <tr><td colSpan={3} className="p-4 text-center text-slate-400">Complete a run to see the detailed time log.</td></tr> :
+                                <tr><td colSpan={3} className="p-4 text-center text-slate-400 italic">No log data. Complete a run!</td></tr> :
                                 gameState.timingLog.map((l, i) => (
-                                    <tr key={i} className="hover:bg-slate-100 dark:hover:bg-slate-800">
-                                        <td className="px-3 py-1 font-mono">{l.prev.toUpperCase()} → {l.char.toUpperCase()}</td>
+                                    <tr key={i} className="hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-100 dark:border-slate-800">
+                                        <td className="px-3 py-1 font-mono">{l.prev === ' ' ? 'Space' : l.prev.toUpperCase()} → {l.char === ' ' ? 'Space' : l.char.toUpperCase()}</td>
                                         <td className="px-3 py-1 font-mono text-red-500">{l.duration.toFixed(3)}s</td>
                                         <td className="px-3 py-1 font-mono text-blue-500">{l.total.toFixed(2)}s</td>
                                     </tr>
@@ -801,20 +758,14 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col">
                         <div className="p-4 border-b border-slate-100 dark:border-slate-700 font-bold text-slate-700 dark:text-slate-200">
-                            Top 5 Slowest Transitions
+                            Slowest Transitions (All Modes)
                         </div>
                         <div className="flex-grow overflow-y-auto p-2">
                              <table className="w-full text-sm">
                                 <tbody>
-                                    {analyticsData.slowest.length === 0 ?
-                                     <tr><td colSpan={2} className="p-8 text-center text-slate-400">
-                                        <div className="flex flex-col items-center gap-2">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                            <p className="font-bold">Not Enough Data</p>
-                                            <p className="text-sm">Complete a few runs to see your analytics.</p>
-                                        </div>
-                                     </td></tr> :
-                                     analyticsData.slowest.slice(0, 5).map(i => (
+                                    {analyticsDataMemo.slowest.length === 0 ?
+                                     <tr><td colSpan={2} className="p-8 text-center text-slate-400">Complete a few runs!</td></tr> :
+                                     analyticsDataMemo.slowest.slice(0, 8).map(i => (
                                          <tr key={i.key} className="hover:bg-slate-100 dark:hover:bg-slate-800">
                                             <td className="px-2 py-1 font-mono text-slate-600 dark:text-slate-300">{i.key}</td>
                                             <td className="px-2 py-1 font-mono text-red-500 font-bold text-right">{i.avg.toFixed(3)}s</td>
@@ -827,20 +778,14 @@ const App: React.FC = () => {
                     </div>
                      <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col">
                         <div className="p-4 border-b border-slate-100 dark:border-slate-700 font-bold text-slate-700 dark:text-slate-200">
-                             Top 5 Fastest Transitions
+                             Fastest Transitions
                         </div>
                         <div className="flex-grow overflow-y-auto p-2">
                              <table className="w-full text-sm">
                                 <tbody>
-                                    {analyticsData.fastest.length === 0 ?
-                                     <tr><td colSpan={2} className="p-8 text-center text-slate-400">
-                                        <div className="flex flex-col items-center gap-2">
-                                            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                                            <p className="font-bold">Not Enough Data</p>
-                                            <p className="text-sm">Complete a few runs to see your analytics.</p>
-                                        </div>
-                                     </td></tr> :
-                                     analyticsData.fastest.slice(0, 5).map(i => (
+                                    {analyticsDataMemo.fastest.length === 0 ?
+                                     <tr><td colSpan={2} className="p-8 text-center text-slate-400">Complete a few runs!</td></tr> :
+                                     analyticsDataMemo.fastest.slice(0, 8).map(i => (
                                          <tr key={i.key} className="hover:bg-slate-100 dark:hover:bg-slate-800">
                                             <td className="px-2 py-1 font-mono text-slate-600 dark:text-slate-300">{i.key}</td>
                                             <td className="px-2 py-1 font-mono text-green-500 font-bold text-right">{i.avg.toFixed(3)}s</td>
@@ -851,7 +796,7 @@ const App: React.FC = () => {
                             </table>
                         </div>
                     </div>
-                     <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col">
+                     <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col h-[500px]">
                         <div className="p-4 border-b border-slate-100 dark:border-slate-700 font-bold text-slate-700 dark:text-slate-200 flex justify-between">
                             <span>AI Speed Coach</span>
                             <span className="text-xs font-normal text-slate-400">Gemini</span>
@@ -873,13 +818,12 @@ const App: React.FC = () => {
             </div>
             <div className={view !== 'history' ? 'hidden' : ''}>
                 {/* HISTORY VIEW */}
-                <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+                <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto">
                     <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
                         <thead className="bg-slate-100 dark:bg-slate-800 uppercase text-[10px] font-bold text-slate-500">
                             <tr>
-                                <th className="px-4 py-3">Profile</th>
-                                <th className="px-4 py-3">Device</th>
                                 <th className="px-4 py-3">Mode</th>
+                                <th className="px-4 py-3">Device</th>
                                 <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700" onClick={() => handleSort('time')}>
                                     Time {historySort.key === 'time' && (historySort.direction === 'asc' ? '▲' : '▼')}
                                 </th>
@@ -893,28 +837,21 @@ const App: React.FC = () => {
                         </thead>
                         <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-700">
                              {sortedHistory.filter(r => r.profile === localData.currentProfile).length === 0 ?
-                              <tr><td colSpan={8} className="p-8 text-center text-slate-400">
-                                <div className="flex flex-col items-center gap-2">
-                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                                    <p className="font-bold">No runs recorded for {localData.currentProfile}!</p>
-                                    <p className="text-sm">Time to set a new benchmark. Go to the Practice tab to start.</p>
-                                </div>
-                              </td></tr> :
+                              <tr><td colSpan={7} className="p-8 text-center text-slate-400 italic">No history yet. Start practice!</td></tr> :
                               sortedHistory.filter(r => r.profile === localData.currentProfile).map(r => (
                                  <tr key={r.timestamp} className={`hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${r.time === personalBestTime ? 'bg-amber-50 dark:bg-amber-900/20' : ''}`}>
-                                    <td className="px-4 py-2 font-bold text-slate-700 dark:text-slate-200">{r.profile}</td>
-                                    <td className="px-4 py-2 text-xs text-slate-500">{r.device}</td>
                                     <td className="px-4 py-2 text-xs uppercase font-bold text-blue-500">{r.mode} {r.blind ? '(Blind)' : ''}</td>
+                                    <td className="px-4 py-2 text-xs text-slate-500">{r.device}</td>
                                     <td className="px-4 py-2 font-mono font-bold">
                                         {r.time.toFixed(2)}s
                                         {r.time === personalBestTime && <span className="ml-2 text-amber-500" title="Personal Best">★</span>}
                                     </td>
                                     <td className="px-4 py-2 text-red-500 font-bold">{r.mistakes}</td>
-                                    <td className="px-4 py-2 text-xs">{new Date(r.timestamp).toLocaleString()}</td>
-                                    <td className="px-4 py-2 text-xs text-slate-400 italic max-w-[150px] truncate" title={r.note || 'No note'}>{r.note || '-'}</td>
+                                    <td className="px-4 py-2 text-xs">{new Date(r.timestamp).toLocaleDateString()}</td>
+                                    <td className="px-4 py-2 text-xs text-slate-400 italic max-w-[150px] truncate">{r.note || '-'}</td>
                                     <td className="px-4 py-2 text-right">
-                                        <button onClick={() => { if (window.confirm('Delete this run forever?')) deleteRun(r.timestamp); }} className="text-red-500 hover:text-red-700 text-xs font-bold" title="Delete Run">
-                                            DELETE
+                                        <button onClick={() => { if (window.confirm('Delete run?')) deleteRun(r.timestamp); }} className="text-red-500 hover:text-red-700 text-[10px] font-bold uppercase tracking-wider">
+                                            Delete
                                         </button>
                                     </td>
                                 </tr>
@@ -923,6 +860,16 @@ const App: React.FC = () => {
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            {/* Footer / Copyright */}
+            <div className="mt-12 pt-8 border-t border-slate-100 dark:border-slate-800 text-center">
+                <p className="text-sm font-bold text-slate-400 dark:text-slate-600">
+                    Made with ❤️ by <span className="text-blue-500">Xiaoyu Tang</span> @ <span className="text-slate-700 dark:text-slate-400 font-black">YuNova LLC</span>
+                </p>
+                <p className="text-[10px] uppercase tracking-widest text-slate-300 dark:text-slate-700 mt-2">
+                    © {new Date().getFullYear()} YuNova LLC. All Rights Reserved.
+                </p>
             </div>
 
         </div>
@@ -942,7 +889,7 @@ const App: React.FC = () => {
 
                         <div className="mb-4 text-left">
                             <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Run Notes</label>
-                            <textarea ref={runNoteRef} value={runNote} onChange={e => setRunNote(e.target.value)} className="w-full mt-1 p-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 border-transparent focus:ring-2 focus:ring-blue-500 outline-none resize-none" rows={2} placeholder="How did it feel? (e.g., cold hands)"></textarea>
+                            <textarea ref={runNoteRef} value={runNote} onChange={e => setRunNote(e.target.value)} className="w-full mt-1 p-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 border-transparent focus:ring-2 focus:ring-blue-500 outline-none resize-none" rows={2} placeholder="Any observations?"></textarea>
                         </div>
 
                         <button onClick={() => { saveCurrentRun(); resetGame(); }} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow-lg shadow-blue-500/30 transition transform hover:scale-[1.02] mb-2">
@@ -974,8 +921,8 @@ const App: React.FC = () => {
                                 ))}
                             </div>
                             <div className="flex mt-2 gap-2">
-                                <input value={newProfile} onChange={e => setNewProfile(e.target.value)} onKeyDown={e => e.key === 'Enter' && addProfile()} type="text" placeholder="New Profile Name" className="flex-grow p-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 outline-none"/>
-                                <button onClick={addProfile} className="bg-green-600 text-white p-2 rounded-lg text-sm hover:bg-green-700">Add</button>
+                                <input value={newProfile} onChange={e => setNewProfile(e.target.value)} onKeyDown={e => e.key === 'Enter' && addProfile()} type="text" placeholder="New Profile" className="flex-grow p-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 outline-none"/>
+                                <button onClick={addProfile} className="bg-green-600 text-white p-2 rounded-lg text-sm hover:bg-green-700 px-3">Add</button>
                             </div>
                         </div>
                         <div className="flex-1">
@@ -989,12 +936,12 @@ const App: React.FC = () => {
                                 ))}
                             </div>
                             <div className="flex mt-2 gap-2">
-                                <input value={newDevice} onChange={e => setNewDevice(e.target.value)} onKeyDown={e => e.key === 'Enter' && addDevice()} type="text" placeholder="New Device Name" className="flex-grow p-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 outline-none"/>
-                                <button onClick={addDevice} className="bg-green-600 text-white p-2 rounded-lg text-sm hover:bg-green-700">Add</button>
+                                <input value={newDevice} onChange={e => setNewDevice(e.target.value)} onKeyDown={e => e.key === 'Enter' && addDevice()} type="text" placeholder="New Device" className="flex-grow p-2 text-sm rounded-lg bg-slate-100 dark:bg-slate-700 outline-none"/>
+                                <button onClick={addDevice} className="bg-green-600 text-white p-2 rounded-lg text-sm hover:bg-green-700 px-3">Add</button>
                             </div>
                         </div>
                     </div>
-                    <button onClick={() => setManagementModalOpen(false)} className="mt-6 w-full bg-blue-600 text-white font-bold py-2 rounded-xl hover:bg-blue-700">Done</button>
+                    <button onClick={() => setManagementModalOpen(false)} className="mt-6 w-full bg-blue-600 text-white font-bold py-2 rounded-xl hover:bg-blue-700 transition">Close</button>
                 </div>
             </div>
         }

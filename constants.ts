@@ -1,5 +1,5 @@
 
-import type { GameState, FingeringDataItem, LocalData, Settings, ProfileSettings } from './types';
+import type { GameState, FingeringDataItem, LocalData, Settings, ProfileSettings, GameMode } from './types';
 
 export const STORAGE_KEY = 'az_speed_suite_data_react';
 export const MAX_ENTRIES = 20;
@@ -12,7 +12,7 @@ export const FINGERING_DATA: FingeringDataItem[] = [
     { char: 'm', code: 'R3' }, { char: 'n', code: 'R2' }, { char: 'o', code: 'R4' }, { char: 'p', code: 'R5' },
     { char: 'q', code: 'L4' }, { char: 'r', code: 'R2' }, { char: 's', code: 'L2' }, { char: 't', code: 'R3' },
     { char: 'u', code: 'R5' }, { char: 'v', code: 'R1' }, { char: 'w', code: 'L3' }, { char: 'x', code: 'R2' },
-    { char: 'y', code: 'R5' }, { char: 'z', code: 'L1' }
+    { char: 'y', code: 'R5' }, { char: 'z', code: 'L1' }, { char: ' ', code: 'T1' }
 ];
 
 export const TONY_GROUPS_ROW1 = [['a'], ['b'], ['c', 'd', 'e'], ['f', 'g', 'h'], ['i', 'j', 'k', 'l'], ['m', 'n'], ['o', 'p']];
@@ -49,4 +49,23 @@ export const DEFAULT_SETTINGS: Settings = {
     blind: false,
     voice: false,
     sound: true
+};
+
+export const getTargetSequence = (mode: GameMode): string[] => {
+    const alpha = ALPHABET.split('');
+    switch (mode) {
+        case 'backwards':
+            return [...alpha].reverse();
+        case 'spaces':
+            return alpha.flatMap((c, i) => i === alpha.length - 1 ? [c] : [c, ' ']);
+        case 'backwards-spaces':
+            const reversed = [...alpha].reverse();
+            return reversed.flatMap((c, i) => i === reversed.length - 1 ? [c] : [c, ' ']);
+        case 'classic':
+        case 'blank':
+        case 'flash':
+        case 'guinness':
+        default:
+            return alpha;
+    }
 };
