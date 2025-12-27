@@ -1,5 +1,5 @@
 
-import type { GameState, FingeringDataItem, LocalData, Settings, ProfileSettings, GameMode } from './types';
+import type { GameState, FingeringDataItem, LocalData, Settings, ProfileSettings, GameMode, SpecializedPracticeSettings } from './types';
 
 export const STORAGE_KEY = 'az_speed_suite_data_react';
 export const MAX_ENTRIES = 20;
@@ -26,6 +26,7 @@ export const INITIAL_GAME_STATE: GameState = {
     lastTime: 0,
     mistakes: 0,
     timingLog: [],
+    mistakeLog: [],
 };
 
 const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
@@ -41,18 +42,35 @@ export const DEFAULT_LOCAL_DATA: LocalData = {
     history: [],
     profileSettings: {
         "Tony": DEFAULT_PROFILE_SETTINGS
-    }
+    },
+    fingerPatterns: [],
+    selectedFingerPatternId: null,
 };
 
 export const DEFAULT_SETTINGS: Settings = {
     mode: "classic",
     blind: false,
     voice: false,
-    sound: true
+    sound: true,
+    specializedPractice: {
+        enabled: false,
+        start: 'a',
+        end: 'z',
+    }
 };
 
-export const getTargetSequence = (mode: GameMode): string[] => {
+const getAlphabetRange = (start: string, end: string): string[] => {
     const alpha = ALPHABET.split('');
+    const startIdx = alpha.indexOf((start || '').toLowerCase());
+    const endIdx = alpha.indexOf((end || '').toLowerCase());
+    if (startIdx === -1 || endIdx === -1) return alpha;
+    const a = Math.min(startIdx, endIdx);
+    const b = Math.max(startIdx, endIdx);
+    return alpha.slice(a, b + 1);
+};
+
+export const getTargetSequence = (mode: GameMode, specialized?: SpecializedPracticeSettings): string[] => {
+    const alpha = specialized?.enabled ? getAlphabetRange(specialized.start, specialized.end) : ALPHABET.split('');
     switch (mode) {
         case 'backwards':
             return [...alpha].reverse();

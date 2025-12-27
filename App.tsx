@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { View, GameMode, LocalData, Settings, GameState, Run, TimingLogEntry, FingeringDataItem, ChatMessage, ProfileSettings } from './types';
+import type { View, GameMode, LocalData, Settings, GameState, Run, TimingLogEntry, FingeringDataItem, ChatMessage, ProfileSettings, FingerPattern, MistakeLogEntry, SpecializedPracticeSettings } from './types';
 import { STORAGE_KEY, MAX_ENTRIES, ALPHABET, FINGERING_DATA, TONY_GROUPS_ROW1, TONY_GROUPS_ROW2, INITIAL_GAME_STATE, DEFAULT_LOCAL_DATA, DEFAULT_SETTINGS, getTargetSequence } from './constants';
 import { getCoachingTip } from './services/geminiService';
 
@@ -89,6 +89,28 @@ const App: React.FC = () => {
     const [countdown, setCountdown] = useState<string | null>(null);
     const [flashEffect, setFlashEffect] = useState(false);
 
+    const isAiAvailable = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
+
+    const alphaLetters = useMemo(() => ALPHABET.split(''), []);
+    const tonyFingeringMap = useMemo<Record<string, string>>(() => {
+        const map: Record<string, string> = {};
+        for (const item of FINGERING_DATA) map[item.char] = item.code;
+        return map;
+    }, []);
+
+    const selectedFingerPattern = useMemo<FingerPattern | null>(() => {
+        const patterns = localData.fingerPatterns || [];
+        const id = localData.selectedFingerPatternId;
+        if (!id) return null;
+        return patterns.find(p => p.id === id) || null;
+    }, [localData.fingerPatterns, localData.selectedFingerPatternId]);
+
+    const activeFingeringMap = useMemo<Record<string, string>>(() => {
+        return selectedFingerPattern?.map || tonyFingeringMap;
+    }, [selectedFingerPattern, tonyFingeringMap]);
+
+    const specializedPractice = settings.specializedPractice;
+
     // AI Coach State
     const [chatHistory, setChatHistory] = useState<ChatMessage[]>([
         { sender: 'ai', text: "I'm your coach. Ask me 'What are my slowest letters?' or 'How can I practice faster?'" }
@@ -103,7 +125,10 @@ const App: React.FC = () => {
     const chatContainerRef = useRef<HTMLDivElement>(null);
 
     // --- TARGET SEQUENCE ---
-    const targetSequence = useMemo(() => getTargetSequence(settings.mode), [settings.mode]);
+    const targetSequence = useMemo(
+        () => getTargetSequence(settings.mode, specializedPractice),
+        [settings.mode, specializedPractice]
+    );
 
     // --- DATA & SETTINGS PERSISTENCE ---
     useEffect(() => {
@@ -123,6 +148,15 @@ const App: React.FC = () => {
                 }
                 if (parsed.settings && typeof parsed.settings.sound === 'undefined') {
                     parsed.settings.sound = true;
+                }
+
+                if (parsed.settings && !parsed.settings.specializedPractice) {
+                    parsed.settings.specializedPractice = DEFAULT_SETTINGS.specializedPractice;
+                }
+
+                if (parsed.localData) {
+                    if (!parsed.localData.fingerPatterns) parsed.localData.fingerPatterns = [];
+                    if (typeof parsed.localData.selectedFingerPatternId === 'undefined') parsed.localData.selectedFingerPatternId = null;
                 }
 
                 setLocalData(parsed.localData || DEFAULT_LOCAL_DATA);
@@ -159,6 +193,34 @@ const App: React.FC = () => {
             }
         }
     }, [view, settings.mode, resultsModalOpen]);
+
+    const requestKeyboard = useCallback(() => {
+        if (resultsModalOpen || managementModalOpen) return;
+        if (view !== 'practice') return;
+
+        if (settings.mode === 'blank') {
+            blankInputRef.current?.focus();
+            return;
+        }
+
+        const el = hiddenInputRef.current;
+        if (!el) return;
+
+        try {
+            // iOS/WKWebView can be picky; a direct + deferred focus helps.
+            (el as any).focus?.({ preventScroll: true });
+        } catch {
+            el.focus();
+        }
+        el.click();
+        window.setTimeout(() => {
+            try {
+                (el as any).focus?.({ preventScroll: true });
+            } catch {
+                el.focus();
+            }
+        }, 0);
+    }, [blankInputRef, hiddenInputRef, managementModalOpen, resultsModalOpen, settings.mode, view]);
 
     useEffect(() => {
        focusCorrectInput();
@@ -264,7 +326,9 @@ const App: React.FC = () => {
             blind: settings.blind,
             note: "", 
             timestamp: Date.now(),
-            log: finalLog
+            log: finalLog,
+            mistakeLog: gameState.mistakeLog,
+            specialized: specializedPractice,
         };
         setCompletedRun(newRun);
         setPostRunAnalysis(generatePostRunAnalysis(newRun, localData.history));
@@ -279,7 +343,7 @@ const App: React.FC = () => {
         playSound('win', settings.sound);
         
         setResultsModalOpen(true);
-    }, [settings, gameState.mistakes, localData]);
+    }, [gameState.mistakeLog, localData, settings, gameState.mistakes, specializedPractice]);
 
 
     // --- EVENT HANDLERS ---
@@ -289,26 +353,13 @@ const App: React.FC = () => {
         setLocalData(d => ({...d, history: [runToSave, ...d.history].slice(0, 1000)}));
     }, [completedRun, runNote]);
 
-    const handleKeydown = useCallback((e: KeyboardEvent) => {
+    const processTypedKey = useCallback((key: string) => {
         if (managementModalOpen || resultsModalOpen) return;
-
-        const key = e.key.toLowerCase();
-
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            resetGame();
-            return;
-        }
-        
-        if (gameState.finished) return; 
-
+        if (gameState.finished) return;
         if (countdown && countdown !== "GO!") return;
-        
-        if (settings.mode === 'blank') return; 
+        if (settings.mode === 'blank') return;
 
         if (!/^[a-z ]$/.test(key)) return;
-
-        e.preventDefault();
 
         if (!gameState.started) {
             if (key === targetSequence[0]) {
@@ -327,7 +378,7 @@ const App: React.FC = () => {
             const now = performance.now();
             const duration = (now - gameState.lastTime) / 1000;
             const total = (now - gameState.startTime) / 1000;
-            
+
             const newLogEntry: TimingLogEntry = {
                 char: target,
                 duration,
@@ -350,14 +401,65 @@ const App: React.FC = () => {
             }
         } else {
             playSound('error', settings.sound);
-            setGameState(gs => ({...gs, mistakes: gs.mistakes + 1}));
+            setGameState(gs => ({
+                ...gs,
+                mistakes: gs.mistakes + 1,
+                mistakeLog: [...gs.mistakeLog, { target: targetSequence[gs.index], typed: key } as MistakeLogEntry]
+            }));
             setIsError(true);
             setTimeout(() => setIsError(false), 300);
         }
     }, [
+        beginRun,
+        countdown,
+        endGame,
+        gameState,
+        managementModalOpen,
+        resultsModalOpen,
+        settings.mode,
+        settings.sound,
+        startGameSequence,
+        targetSequence
+    ]);
+
+    const handleHiddenInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+        const raw = e.target.value;
+        if (!raw) return;
+
+        const value = raw.toLowerCase();
+        for (const ch of value) {
+            if (ch === '\n' || ch === '\r' || ch === '\t') continue;
+            processTypedKey(ch);
+        }
+
+        e.target.value = '';
+    }, [processTypedKey]);
+
+    const handleKeydown = useCallback((e: KeyboardEvent) => {
+        if (managementModalOpen || resultsModalOpen) return;
+
+        const key = e.key.toLowerCase();
+
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            resetGame();
+            return;
+        }
+        
+        if (gameState.finished) return; 
+
+        if (countdown && countdown !== "GO!") return;
+        
+        if (settings.mode === 'blank') return; 
+        if (!/^[a-z ]$/.test(key)) return;
+
+        e.preventDefault();
+        processTypedKey(key);
+    }, [
         gameState, settings, localData, targetSequence,
         countdown, managementModalOpen, resultsModalOpen,
-        beginRun, endGame, resetGame, startGameSequence
+        beginRun, endGame, resetGame, startGameSequence,
+        processTypedKey
     ]);
     
     const handleBlankInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -410,7 +512,11 @@ const App: React.FC = () => {
 
         } else if (value.length > gameState.index) {
             playSound('error', settings.sound);
-            setGameState(gs => ({...gs, mistakes: gs.mistakes + 1}));
+            setGameState(gs => ({
+                ...gs,
+                mistakes: gs.mistakes + 1,
+                mistakeLog: [...gs.mistakeLog, { target: expectedChar, typed: lastTypedChar }]
+            }));
             setIsError(true);
             setTimeout(() => setIsError(false), 300);
         }
@@ -524,6 +630,12 @@ const App: React.FC = () => {
     const handleSendChat = async () => {
         const msg = chatInput.trim();
         if(!msg || isCoachLoading) return;
+
+        if (!isAiAvailable) {
+            setChatHistory(h => [...h, { sender: 'user', text: msg }, { sender: 'ai', text: "Coming soon." }]);
+            setChatInput("");
+            return;
+        }
         
         const newHistory: ChatMessage[] = [...chatHistory, { sender: 'user', text: msg }];
         setChatHistory(newHistory);
@@ -604,12 +716,154 @@ const App: React.FC = () => {
 
     const analyticsDataMemo = useMemo(() => getAnalyticsData(), [getAnalyticsData]);
 
+    // --- FINGER PATTERNS ---
+    const [patternEditorOpen, setPatternEditorOpen] = useState(false);
+    const [patternEditorId, setPatternEditorId] = useState<string | null>(null);
+    const [patternEditorName, setPatternEditorName] = useState('');
+    const [patternEditorMap, setPatternEditorMap] = useState<Record<string, string>>({});
+
+    const fingerOptions = useMemo(() => ([
+        { value: 'L5', label: 'L Pinky (L5)' },
+        { value: 'L4', label: 'L Ring (L4)' },
+        { value: 'L3', label: 'L Middle (L3)' },
+        { value: 'L2', label: 'L Index (L2)' },
+        { value: 'L1', label: 'L Thumb (L1)' },
+        { value: 'R1', label: 'R Thumb (R1)' },
+        { value: 'R2', label: 'R Index (R2)' },
+        { value: 'R3', label: 'R Middle (R3)' },
+        { value: 'R4', label: 'R Ring (R4)' },
+        { value: 'R5', label: 'R Pinky (R5)' },
+        { value: 'T1', label: 'Thumbs/Other (T1)' },
+        { value: '?', label: 'Unknown (?)' },
+    ]), []);
+
+    const openCreatePattern = () => {
+        setPatternEditorId(null);
+        setPatternEditorName("");
+        setPatternEditorMap({ ...tonyFingeringMap });
+        setPatternEditorOpen(true);
+    };
+
+    const openEditPattern = (pattern: FingerPattern) => {
+        setPatternEditorId(pattern.id);
+        setPatternEditorName(pattern.name);
+        setPatternEditorMap({ ...pattern.map });
+        setPatternEditorOpen(true);
+    };
+
+    const savePattern = () => {
+        const name = patternEditorName.trim();
+        if (!name) return;
+
+        const now = Date.now();
+        const id = patternEditorId || (globalThis.crypto?.randomUUID?.() ?? `fp_${now}_${Math.random().toString(16).slice(2)}`);
+        const next: FingerPattern = {
+            id,
+            name,
+            map: { ...patternEditorMap },
+            createdAt: patternEditorId ? (localData.fingerPatterns?.find(p => p.id === patternEditorId)?.createdAt ?? now) : now,
+            updatedAt: now,
+        };
+
+        setLocalData(d => {
+            const patterns = d.fingerPatterns || [];
+            const exists = patterns.some(p => p.id === id);
+            const updatedPatterns = exists ? patterns.map(p => p.id === id ? next : p) : [next, ...patterns];
+            return {
+                ...d,
+                fingerPatterns: updatedPatterns,
+                selectedFingerPatternId: d.selectedFingerPatternId || null,
+            };
+        });
+
+        setPatternEditorOpen(false);
+        setPatternEditorId(null);
+        setPatternEditorName("");
+        setPatternEditorMap({});
+    };
+
+    const deletePattern = (id: string) => {
+        if (!window.confirm('Delete this finger pattern?')) return;
+        setLocalData(d => {
+            const patterns = (d.fingerPatterns || []).filter(p => p.id !== id);
+            const selected = d.selectedFingerPatternId === id ? null : d.selectedFingerPatternId;
+            return { ...d, fingerPatterns: patterns, selectedFingerPatternId: selected };
+        });
+    };
+
+    const selectPattern = (idOrNull: string | null) => {
+        setLocalData(d => ({ ...d, selectedFingerPatternId: idOrNull }));
+    };
+
+    const renderPatternTemplate = (map: Record<string, string>) => {
+        const renderGroup = (letters: string[]) => (
+            <div className="flex flex-wrap items-center gap-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
+                {letters.map(ch => (
+                    <div key={ch} className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        <span className="font-mono font-black text-slate-800 dark:text-white">{ch.toUpperCase()}</span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${((map[ch] || '?').startsWith('L')) ? 'fingering-badge fingering-L' : ((map[ch] || '?').startsWith('R') ? 'fingering-badge fingering-R' : 'bg-slate-500 text-white')}`}>{map[ch] || '?'}</span>
+                    </div>
+                ))}
+            </div>
+        );
+
+        return (
+            <div className="space-y-3">
+                <div className="flex flex-wrap gap-3">{TONY_GROUPS_ROW1.map((g, idx) => <div key={`r1_${idx}`}>{renderGroup(g)}</div>)}</div>
+                <div className="flex flex-wrap gap-3">{TONY_GROUPS_ROW2.map((g, idx) => <div key={`r2_${idx}`}>{renderGroup(g)}</div>)}</div>
+            </div>
+        );
+    };
+
+    // --- SPECIALIZED PRACTICE STATS (CURRENT RUN) ---
+    const specializedRangeLetters = useMemo(() => {
+        if (!specializedPractice?.enabled) return [] as string[];
+        const start = (specializedPractice.start || 'a').toLowerCase();
+        const end = (specializedPractice.end || 'z').toLowerCase();
+        const startIdx = alphaLetters.indexOf(start);
+        const endIdx = alphaLetters.indexOf(end);
+        if (startIdx === -1 || endIdx === -1) return [] as string[];
+        const a = Math.min(startIdx, endIdx);
+        const b = Math.max(startIdx, endIdx);
+        return alphaLetters.slice(a, b + 1);
+    }, [alphaLetters, specializedPractice]);
+
+    const currentRunLetterStats = useMemo(() => {
+        if (!specializedPractice?.enabled) return [] as Array<{ letter: string; attempts: number; correct: number; mistakes: number; accuracy: number; avg: number | null; }>;
+
+        const durationsByLetter: Record<string, number[]> = {};
+        for (const l of specializedRangeLetters) durationsByLetter[l] = [];
+
+        for (const entry of gameState.timingLog) {
+            const ch = entry.char;
+            if (!durationsByLetter[ch]) continue;
+            if (!entry.prev) continue; // skip first (0s) entry
+            if (entry.duration <= 0) continue;
+            durationsByLetter[ch].push(entry.duration);
+        }
+
+        const mistakesByTarget: Record<string, number> = {};
+        for (const l of specializedRangeLetters) mistakesByTarget[l] = 0;
+        for (const m of gameState.mistakeLog) {
+            if (typeof mistakesByTarget[m.target] === 'number') mistakesByTarget[m.target] += 1;
+        }
+
+        return specializedRangeLetters.map(letter => {
+            const correct = durationsByLetter[letter]?.length || 0;
+            const mistakes = mistakesByTarget[letter] || 0;
+            const attempts = correct + mistakes;
+            const avg = correct > 0 ? (durationsByLetter[letter].reduce((a, b) => a + b, 0) / correct) : null;
+            const accuracy = attempts > 0 ? (correct / attempts) : 0;
+            return { letter, attempts, correct, mistakes, accuracy, avg };
+        });
+    }, [gameState.mistakeLog, gameState.timingLog, specializedPractice, specializedRangeLetters]);
+
 
     return (
         <>
         {flashEffect && <div id="flash-overlay" className="fixed inset-0 z-[100] animate-flash"></div>}
 
-        <div className="w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-6 md:p-8 mt-4 border border-slate-200 dark:border-slate-800">
+        <div className="w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 sm:p-6 md:p-8 mt-4 border border-slate-200 dark:border-slate-800">
             {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b border-slate-100 dark:border-slate-700 pb-4">
                 <div>
@@ -639,6 +893,7 @@ const App: React.FC = () => {
             {/* Main Navigation Tabs */}
             <div className="flex overflow-x-auto gap-6 mb-6 text-sm font-bold uppercase tracking-wide">
                 <button onClick={() => setView('practice')} className={view === 'practice' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Practice & Record</button>
+                <button onClick={() => setView('fingerPatterns')} className={view === 'fingerPatterns' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Finger Pattern Practice</button>
                 <button onClick={() => setView('analytics')} className={view === 'analytics' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Analytics & Coach</button>
                 <button onClick={() => setView('history')} className={view === 'history' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Run History</button>
                 <button onClick={() => setView('about')} className={view === 'about' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>About</button>
@@ -668,6 +923,81 @@ const App: React.FC = () => {
                             <span className="font-semibold text-slate-600 dark:text-slate-300">Show Fingering</span>
                         </label>
                    }
+
+                   {currentProfileSettings.fingering && ['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && (
+                        <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                            <span className="font-semibold text-slate-600 dark:text-slate-300">Finger Pattern</span>
+                            <select
+                                value={localData.selectedFingerPatternId || ''}
+                                onChange={(e) => selectPattern(e.target.value || null)}
+                                className="bg-transparent text-slate-700 dark:text-white text-sm font-bold outline-none"
+                            >
+                                <option value="">Tony's Fingering</option>
+                                {(localData.fingerPatterns || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                        </div>
+                   )}
+
+                    <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                        <input
+                            type="checkbox"
+                            checked={Boolean(specializedPractice?.enabled)}
+                            onChange={(e) => {
+                                const enabled = e.target.checked;
+                                setSettings(s => ({
+                                    ...s,
+                                    specializedPractice: {
+                                        ...(s.specializedPractice || DEFAULT_SETTINGS.specializedPractice),
+                                        enabled,
+                                    }
+                                }));
+                                resetGame();
+                            }}
+                            className="accent-blue-500"
+                        />
+                        <span className="font-semibold text-slate-600 dark:text-slate-300">Specialized Practice</span>
+                    </label>
+
+                    {specializedPractice?.enabled && (
+                        <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                            <span className="font-semibold text-slate-600 dark:text-slate-300">Range</span>
+                            <select
+                                value={(specializedPractice.start || 'a').toLowerCase()}
+                                onChange={(e) => {
+                                    const start = e.target.value;
+                                    setSettings(s => ({
+                                        ...s,
+                                        specializedPractice: {
+                                            ...(s.specializedPractice || DEFAULT_SETTINGS.specializedPractice),
+                                            start,
+                                        } as SpecializedPracticeSettings
+                                    }));
+                                    resetGame();
+                                }}
+                                className="bg-transparent text-slate-700 dark:text-white text-sm font-bold outline-none"
+                            >
+                                {alphaLetters.map(l => <option key={`sp_s_${l}`} value={l}>{l.toUpperCase()}</option>)}
+                            </select>
+                            <span className="text-slate-400 font-bold">–</span>
+                            <select
+                                value={(specializedPractice.end || 'z').toLowerCase()}
+                                onChange={(e) => {
+                                    const end = e.target.value;
+                                    setSettings(s => ({
+                                        ...s,
+                                        specializedPractice: {
+                                            ...(s.specializedPractice || DEFAULT_SETTINGS.specializedPractice),
+                                            end,
+                                        } as SpecializedPracticeSettings
+                                    }));
+                                    resetGame();
+                                }}
+                                className="bg-transparent text-slate-700 dark:text-white text-sm font-bold outline-none"
+                            >
+                                {alphaLetters.map(l => <option key={`sp_e_${l}`} value={l}>{l.toUpperCase()}</option>)}
+                            </select>
+                        </div>
+                    )}
                    {settings.mode !== 'blank' &&
                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                             <input type="checkbox" checked={settings.blind} onChange={e => setSettings({...settings, blind: e.target.checked})} className="accent-blue-500" />
@@ -684,7 +1014,7 @@ const App: React.FC = () => {
                     </label>
                 </div>
                 
-                 <div className="grid grid-cols-3 gap-4 mb-8">
+                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
                         <div className="text-[10px] uppercase font-bold text-slate-400">Mode Record</div>
                         <div className="text-2xl font-black text-blue-500 font-mono">{deviceRecord}</div>
@@ -699,10 +1029,20 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                <div className={`relative min-h-[350px] flex flex-col items-center justify-center bg-slate-100 dark:bg-slate-800/50 rounded-2xl p-8 overflow-hidden transition-all duration-300 ${isError ? 'animate-shake' : ''} ${settings.mode === 'guinness' && gameState.started && !gameState.finished ? 'border-2 border-red-500 shadow-lg shadow-red-500/10' : 'border border-slate-200 dark:border-slate-800'}`}>
+                <div
+                    className={`relative min-h-[320px] sm:min-h-[350px] flex flex-col items-center justify-center bg-slate-100 dark:bg-slate-800/50 rounded-2xl p-4 sm:p-8 overflow-hidden transition-all duration-300 ${isError ? 'animate-shake' : ''} ${settings.mode === 'guinness' && gameState.started && !gameState.finished ? 'border-2 border-red-500 shadow-lg shadow-red-500/10' : 'border border-slate-200 dark:border-slate-800'}`}
+                    onPointerDown={() => {
+                        requestKeyboard();
+                        ensureAudioContext();
+                    }}
+                    onTouchStart={() => {
+                        requestKeyboard();
+                        ensureAudioContext();
+                    }}
+                >
                     {countdown && 
                         <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center backdrop-blur-sm">
-                            <div className="text-9xl font-black text-white animate-pulse">{countdown}</div>
+                            <div className="text-7xl sm:text-9xl font-black text-white animate-pulse">{countdown}</div>
                         </div>
                     }
 
@@ -712,7 +1052,8 @@ const App: React.FC = () => {
                        {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && (
                             <div className="flex flex-wrap justify-center gap-2 max-w-4xl">
                                 {targetSequence.map((char, i) => {
-                                    const data = FINGERING_DATA.find(d => d.char === char) || { char, code: '?' };
+                                    const code = activeFingeringMap[char] || '?';
+                                    const data: FingeringDataItem = { char, code };
                                     return <LetterBox key={i} data={data} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />
                                 })}
                             </div>
@@ -728,8 +1069,8 @@ const App: React.FC = () => {
 
                 <div className="mt-8">
                     <h2 className="text-xl font-bold mb-4 text-slate-700 dark:text-slate-200">Current Run Breakdown</h2>
-                    <div className="overflow-y-auto max-h-[300px] bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700">
-                        <table className="w-full text-sm">
+                    <div className="overflow-x-auto overflow-y-auto max-h-[300px] bg-slate-50 dark:bg-slate-850 p-3 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                        <table className="w-full text-xs sm:text-sm">
                             <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-[10px] uppercase font-bold text-slate-500">
                                 <tr>
                                     <th className="px-3 py-2 text-left">Transition</th>
@@ -742,18 +1083,161 @@ const App: React.FC = () => {
                                 <tr><td colSpan={3} className="p-4 text-center text-slate-400 italic">No log data. Complete a run!</td></tr> :
                                 gameState.timingLog.map((l, i) => (
                                     <tr key={i} className="hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-100 dark:border-slate-800">
-                                        <td className="px-3 py-1 font-mono">{l.prev === ' ' ? 'Space' : l.prev.toUpperCase()} → {l.char === ' ' ? 'Space' : l.char.toUpperCase()}</td>
-                                        <td className="px-3 py-1 font-mono text-red-500">{l.duration.toFixed(3)}s</td>
-                                        <td className="px-3 py-1 font-mono text-blue-500">{l.total.toFixed(2)}s</td>
+                                        <td className="px-2 sm:px-3 py-1 font-mono whitespace-nowrap">{l.prev === ' ' ? 'Space' : l.prev.toUpperCase()} → {l.char === ' ' ? 'Space' : l.char.toUpperCase()}</td>
+                                        <td className="px-2 sm:px-3 py-1 font-mono text-red-500 whitespace-nowrap">{l.duration.toFixed(3)}s</td>
+                                        <td className="px-2 sm:px-3 py-1 font-mono text-blue-500 whitespace-nowrap">{l.total.toFixed(2)}s</td>
                                     </tr>
                                 ))
                                }
                             </tbody>
                         </table>
                     </div>
+
+                    {specializedPractice?.enabled && (
+                        <div className="mt-4">
+                            <div className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-2">Specialized Practice: Per-letter Analysis</div>
+                            <div className="overflow-x-auto bg-slate-50 dark:bg-slate-850 p-3 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-700">
+                                <table className="w-full text-xs sm:text-sm">
+                                    <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] uppercase font-bold text-slate-500">
+                                        <tr>
+                                            <th className="px-3 py-2 text-left">Letter</th>
+                                            <th className="px-3 py-2 text-left">Attempts</th>
+                                            <th className="px-3 py-2 text-left">Accuracy</th>
+                                            <th className="px-3 py-2 text-left">Avg Time</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {currentRunLetterStats.length === 0 ? (
+                                            <tr><td colSpan={4} className="p-4 text-center text-slate-400 italic">No data yet.</td></tr>
+                                        ) : (
+                                            currentRunLetterStats.map(row => (
+                                                <tr key={`ls_${row.letter}`} className="hover:bg-slate-100 dark:hover:bg-slate-800 border-b border-slate-100 dark:border-slate-800">
+                                                    <td className="px-3 py-2 font-mono font-black">{row.letter.toUpperCase()}</td>
+                                                    <td className="px-3 py-2 font-mono">{row.attempts}</td>
+                                                    <td className="px-3 py-2 font-mono">{(row.accuracy * 100).toFixed(0)}%</td>
+                                                    <td className="px-3 py-2 font-mono text-red-500">{row.avg === null ? '--' : `${row.avg.toFixed(3)}s`}</td>
+                                                </tr>
+                                            ))
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </div>
 
             </div>
+            <div className={view !== 'fingerPatterns' ? 'hidden' : ''}>
+                {/* FINGER PATTERN PRACTICE VIEW */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Default</div>
+                                <div className="text-lg font-black text-slate-800 dark:text-white">Tony's Fingering</div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => selectPattern(null)} className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700">Use in Practice</button>
+                                <button onClick={() => setView('about')} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">About Tony</button>
+                            </div>
+                        </div>
+
+                        <div className="mt-4">{renderPatternTemplate(tonyFingeringMap)}</div>
+                    </div>
+
+                    <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">My Fingerings</div>
+                                <div className="text-lg font-black text-slate-800 dark:text-white">Custom Patterns</div>
+                            </div>
+                            <button onClick={openCreatePattern} className="bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-green-700">New Pattern</button>
+                        </div>
+
+                        {(localData.fingerPatterns || []).length === 0 ? (
+                            <div className="mt-4 text-sm text-slate-500 dark:text-slate-400">No custom patterns yet. Create one like “Bob's Fingering Pattern”.</div>
+                        ) : (
+                            <div className="mt-4 space-y-2">
+                                {(localData.fingerPatterns || []).map(p => (
+                                    <div key={p.id} className="flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
+                                        <div className="min-w-0">
+                                            <div className="font-bold text-slate-800 dark:text-white truncate">{p.name}</div>
+                                            <div className="text-[11px] text-slate-500 dark:text-slate-400">Updated {new Date(p.updatedAt).toLocaleDateString()}</div>
+                                        </div>
+                                        <div className="flex gap-2 flex-none">
+                                            <button onClick={() => selectPattern(p.id)} className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700">Use</button>
+                                            <button onClick={() => openEditPattern(p)} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">Edit</button>
+                                            <button onClick={() => deletePattern(p.id)} className="bg-red-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-red-700">Delete</button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {selectedFingerPattern && (
+                    <div className="mt-6 bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Selected</div>
+                                <div className="text-lg font-black text-slate-800 dark:text-white">{selectedFingerPattern.name}</div>
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">Shown in Practice when “Show Fingering” is enabled.</div>
+                        </div>
+                        <div className="mt-4">{renderPatternTemplate(selectedFingerPattern.map)}</div>
+                    </div>
+                )}
+
+                {patternEditorOpen && (
+                    <div className="mt-6 bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                        <div className="flex items-center justify-between gap-3">
+                            <div className="text-lg font-black text-slate-800 dark:text-white">{patternEditorId ? 'Edit Pattern' : 'New Pattern'}</div>
+                            <button onClick={() => { setPatternEditorOpen(false); setPatternEditorId(null); }} className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 text-xs font-bold uppercase">Close</button>
+                        </div>
+
+                        <div className="mt-4">
+                            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Name</label>
+                            <input value={patternEditorName} onChange={e => setPatternEditorName(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" placeholder="Bob's Fingering Pattern" />
+                        </div>
+
+                        <div className="mt-5">
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Per-letter finger (L/R + finger)</div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                {alphaLetters.map(letter => (
+                                    <div key={`fp_${letter}`} className="flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
+                                        <div className="font-mono font-black text-slate-800 dark:text-white">{letter.toUpperCase()}</div>
+                                        <select
+                                            value={patternEditorMap[letter] || '?'}
+                                            onChange={(e) => setPatternEditorMap(m => ({ ...m, [letter]: e.target.value }))}
+                                            className="bg-transparent text-slate-700 dark:text-white text-sm font-bold outline-none"
+                                        >
+                                            {fingerOptions.map(o => <option key={`${letter}_${o.value}`} value={o.value}>{o.label}</option>)}
+                                        </select>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="mt-5 flex gap-2">
+                            <button
+                                onClick={savePattern}
+                                disabled={!patternEditorName.trim()}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:bg-blue-400"
+                            >
+                                Save Pattern
+                            </button>
+                            <button
+                                onClick={() => { setPatternEditorMap({ ...tonyFingeringMap }); }}
+                                className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
+                            >
+                                Reset to Tony
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <div className={view !== 'analytics' ? 'hidden' : ''}>
                 {/* ANALYTICS VIEW */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -802,38 +1286,49 @@ const App: React.FC = () => {
                             <span>AI Speed Coach</span>
                             <span className="text-xs font-normal text-slate-400">Gemini</span>
                         </div>
-                        <div ref={chatContainerRef} className="flex-grow overflow-y-auto p-4 space-y-3 bg-slate-50 dark:bg-slate-900/50">
-                            {chatHistory.map((msg, i) => (
-                               <div key={i} className={`p-3 rounded-lg text-sm ${msg.sender === 'ai' ? 'bg-blue-50 dark:bg-blue-900/20 text-slate-800 dark:text-slate-200' : 'bg-slate-100 dark:bg-slate-700 text-right text-slate-800 dark:text-slate-100'}`}>
-                                   {msg.text.split('\n').map((line, index) => <p key={index}>{line}</p>)}
-                               </div>
-                            ))}
-                            {isCoachLoading && <div className="p-3 rounded-lg text-sm bg-blue-50 dark:bg-blue-900/20 text-slate-800 dark:text-slate-200">Coach is thinking...</div>}
-                        </div>
-                        <div className="p-3 border-t border-slate-100 dark:border-slate-700 flex gap-2">
-                            <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendChat()} className="flex-grow px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Ask coach..." />
-                            <button onClick={handleSendChat} disabled={isCoachLoading} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 disabled:bg-blue-400">Send</button>
-                        </div>
+                        {!isAiAvailable ? (
+                            <div className="flex-grow p-5 bg-slate-50 dark:bg-slate-900/50">
+                                <div className="text-sm font-bold text-slate-800 dark:text-slate-200">Coming soon</div>
+                                <div className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                                    AI coaching will return in a future update.
+                                </div>
+                            </div>
+                        ) : (
+                            <>
+                                <div ref={chatContainerRef} className="flex-grow overflow-y-auto p-4 space-y-3 bg-slate-50 dark:bg-slate-900/50">
+                                    {chatHistory.map((msg, i) => (
+                                       <div key={i} className={`p-3 rounded-lg text-sm ${msg.sender === 'ai' ? 'bg-blue-50 dark:bg-blue-900/20 text-slate-800 dark:text-slate-200' : 'bg-slate-100 dark:bg-slate-700 text-right text-slate-800 dark:text-slate-100'}`}>
+                                           {msg.text.split('\n').map((line, index) => <p key={index}>{line}</p>)}
+                                       </div>
+                                    ))}
+                                    {isCoachLoading && <div className="p-3 rounded-lg text-sm bg-blue-50 dark:bg-blue-900/20 text-slate-800 dark:text-slate-200">Coach is thinking...</div>}
+                                </div>
+                                <div className="p-3 border-t border-slate-100 dark:border-slate-700 flex gap-2">
+                                    <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendChat()} className="flex-grow px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-100 outline-none focus:ring-2 focus:ring-blue-500" placeholder="Ask coach..." />
+                                    <button onClick={handleSendChat} disabled={isCoachLoading} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-blue-700 disabled:bg-blue-400">Send</button>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             </div>
             <div className={view !== 'history' ? 'hidden' : ''}>
                 {/* HISTORY VIEW */}
                 <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700 overflow-x-auto">
-                    <table className="w-full text-sm text-left text-slate-600 dark:text-slate-300">
+                    <table className="w-full text-xs sm:text-sm text-left text-slate-600 dark:text-slate-300">
                         <thead className="bg-slate-100 dark:bg-slate-800 uppercase text-[10px] font-bold text-slate-500">
                             <tr>
-                                <th className="px-4 py-3">Mode</th>
-                                <th className="px-4 py-3">Device</th>
-                                <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700" onClick={() => handleSort('time')}>
+                                <th className="px-3 sm:px-4 py-3">Mode</th>
+                                <th className="hidden sm:table-cell px-3 sm:px-4 py-3">Device</th>
+                                <th className="px-3 sm:px-4 py-3 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700" onClick={() => handleSort('time')}>
                                     Time {historySort.key === 'time' && (historySort.direction === 'asc' ? '▲' : '▼')}
                                 </th>
-                                <th className="px-4 py-3">Mistakes</th>
-                                <th className="px-4 py-3 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700" onClick={() => handleSort('timestamp')}>
+                                <th className="px-3 sm:px-4 py-3">Mistakes</th>
+                                <th className="px-3 sm:px-4 py-3 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700" onClick={() => handleSort('timestamp')}>
                                     Date {historySort.key === 'timestamp' && (historySort.direction === 'asc' ? '▲' : '▼')}
                                 </th>
-                                <th className="px-4 py-3">Notes</th>
-                                <th className="px-4 py-3 text-right">Actions</th>
+                                <th className="hidden sm:table-cell px-3 sm:px-4 py-3">Notes</th>
+                                <th className="px-3 sm:px-4 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="bg-white dark:bg-slate-900 divide-y divide-slate-200 dark:divide-slate-700">
@@ -841,18 +1336,19 @@ const App: React.FC = () => {
                               <tr><td colSpan={7} className="p-8 text-center text-slate-400 italic">No history yet. Start practice!</td></tr> :
                               sortedHistory.filter(r => r.profile === localData.currentProfile).map(r => (
                                  <tr key={r.timestamp} className={`hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${r.time === personalBestTime ? 'bg-amber-50 dark:bg-amber-900/20' : ''}`}>
-                                    <td className="px-4 py-2 text-xs uppercase font-bold text-blue-500">{r.mode} {r.blind ? '(Blind)' : ''}</td>
-                                    <td className="px-4 py-2 text-xs text-slate-500">{r.device}</td>
-                                    <td className="px-4 py-2 font-mono font-bold">
+                                    <td className="px-3 sm:px-4 py-2 text-[10px] sm:text-xs uppercase font-bold text-blue-500 whitespace-nowrap">{r.mode} {r.blind ? '(Blind)' : ''}</td>
+                                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2 text-xs text-slate-500">{r.device}</td>
+                                    <td className="px-3 sm:px-4 py-2 font-mono font-bold whitespace-nowrap">
                                         {r.time.toFixed(2)}s
                                         {r.time === personalBestTime && <span className="ml-2 text-amber-500" title="Personal Best">★</span>}
                                     </td>
-                                    <td className="px-4 py-2 text-red-500 font-bold">{r.mistakes}</td>
-                                    <td className="px-4 py-2 text-xs">{new Date(r.timestamp).toLocaleDateString()}</td>
-                                    <td className="px-4 py-2 text-xs text-slate-400 italic max-w-[150px] truncate">{r.note || '-'}</td>
-                                    <td className="px-4 py-2 text-right">
-                                        <button onClick={() => { if (window.confirm('Delete run?')) deleteRun(r.timestamp); }} className="text-red-500 hover:text-red-700 text-[10px] font-bold uppercase tracking-wider">
-                                            Delete
+                                    <td className="px-3 sm:px-4 py-2 text-red-500 font-bold whitespace-nowrap">{r.mistakes}</td>
+                                    <td className="px-3 sm:px-4 py-2 text-xs whitespace-nowrap">{new Date(r.timestamp).toLocaleDateString()}</td>
+                                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2 text-xs text-slate-400 italic max-w-[150px] truncate">{r.note || '-'}</td>
+                                    <td className="px-3 sm:px-4 py-2 text-right whitespace-nowrap">
+                                        <button onClick={() => { if (window.confirm('Delete run?')) deleteRun(r.timestamp); }} className="text-red-500 hover:text-red-700 text-[9px] sm:text-[10px] font-bold uppercase tracking-wider">
+                                            <span className="sm:hidden">Del</span>
+                                            <span className="hidden sm:inline">Delete</span>
                                         </button>
                                     </td>
                                 </tr>
@@ -874,7 +1370,7 @@ const App: React.FC = () => {
 
                         <div className="mt-5 space-y-4 text-sm md:text-base text-slate-600 dark:text-slate-300 leading-relaxed">
                             <p>
-                                Alphabet Typing Suite was born from a pursuit of the impossible. Created by Xiaoyu Tang, a speed typing phenom who shattered
+                                Alphabet Typing Suite was born from a pursuit of the impossible. Created by Xiaoyu Tang ("Tony"), a speed typing phenom who shattered
                                 records with an incredible 1.21-second alphabet run.
                             </p>
                             <p>
@@ -993,7 +1489,24 @@ const App: React.FC = () => {
             </div>
         }
 
-        <input type="text" ref={hiddenInputRef} className="sr-only" autoFocus />
+        <input
+            type="text"
+            ref={hiddenInputRef}
+            // Use a tiny (but focusable) input so iOS reliably shows the software keyboard.
+            className="fixed top-0 left-0 w-[1px] h-[1px] opacity-0"
+            inputMode="text"
+            autoCorrect="off"
+            autoCapitalize="off"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={handleHiddenInputChange}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    resetGame();
+                }
+            }}
+        />
         </>
     );
 };

@@ -1,6 +1,22 @@
 
 export type GameMode = 'classic' | 'blank' | 'flash' | 'guinness' | 'backwards' | 'spaces' | 'backwards-spaces';
-export type View = 'practice' | 'analytics' | 'history' | 'about';
+export type View = 'practice' | 'fingerPatterns' | 'analytics' | 'history' | 'about';
+
+export type FingerCode = string;
+
+export interface FingerPattern {
+    id: string;
+    name: string;
+    map: Record<string, FingerCode>;
+    createdAt: number;
+    updatedAt: number;
+}
+
+export interface SpecializedPracticeSettings {
+    enabled: boolean;
+    start: string;
+    end: string;
+}
 
 export interface FingeringDataItem {
     char: string;
@@ -14,6 +30,11 @@ export interface TimingLogEntry {
     prev: string;
 }
 
+export interface MistakeLogEntry {
+    target: string;
+    typed: string;
+}
+
 export interface Run {
     time: number;
     mistakes: number;
@@ -24,6 +45,10 @@ export interface Run {
     note: string;
     timestamp: number;
     log: TimingLogEntry[];
+
+    // Optional fields for backwards compatibility with older stored runs.
+    mistakeLog?: MistakeLogEntry[];
+    specialized?: SpecializedPracticeSettings;
 }
 
 export interface ProfileSettings {
@@ -38,6 +63,10 @@ export interface LocalData {
     currentDevice: string;
     history: Run[];
     profileSettings: { [profile: string]: ProfileSettings };
+
+    // Custom finger patterns
+    fingerPatterns?: FingerPattern[];
+    selectedFingerPatternId?: string | null;
 }
 
 export interface Settings {
@@ -45,6 +74,8 @@ export interface Settings {
     blind: boolean;
     voice: boolean;
     sound: boolean;
+
+    specializedPractice: SpecializedPracticeSettings;
 }
 
 export interface GameState {
@@ -55,6 +86,8 @@ export interface GameState {
     lastTime: number;
     mistakes: number;
     timingLog: TimingLogEntry[];
+
+    mistakeLog: MistakeLogEntry[];
 }
 
 export interface ChatMessage {
