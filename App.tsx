@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import type { View, GameMode, LocalData, Settings, GameState, Run, TimingLogEntry, FingeringDataItem, ChatMessage, ProfileSettings, FingerPattern, MistakeLogEntry, SpecializedPracticeSettings } from './types';
+import type { View, GameMode, LocalData, Settings, GameState, Run, TimingLogEntry, FingeringDataItem, ChatMessage, ProfileSettings, FingerPattern, RhythmPattern, MistakeLogEntry, SpecializedPracticeSettings } from './types';
 import { STORAGE_KEY, MAX_ENTRIES, ALPHABET, FINGERING_DATA, TONY_GROUPS_ROW1, TONY_GROUPS_ROW2, INITIAL_GAME_STATE, DEFAULT_LOCAL_DATA, DEFAULT_SETTINGS, getTargetSequence } from './constants';
 import { getCoachingTip } from './services/geminiService';
 
@@ -157,6 +157,8 @@ const App: React.FC = () => {
                 if (parsed.localData) {
                     if (!parsed.localData.fingerPatterns) parsed.localData.fingerPatterns = [];
                     if (typeof parsed.localData.selectedFingerPatternId === 'undefined') parsed.localData.selectedFingerPatternId = null;
+                    if (!parsed.localData.rhythmPatterns) parsed.localData.rhythmPatterns = [];
+                    if (typeof parsed.localData.selectedRhythmPatternId === 'undefined') parsed.localData.selectedRhythmPatternId = null;
                 }
 
                 setLocalData(parsed.localData || DEFAULT_LOCAL_DATA);
@@ -287,13 +289,28 @@ const App: React.FC = () => {
 
     const generatePostRunAnalysis = (run: Run, history: Run[]): string[] => {
         const analysis: string[] = [];
-        const relevantHistory = history.filter(r => r.profile === run.profile && r.device === run.device && r.mode === run.mode);
+        const isSpecial = Boolean(run.specialized?.enabled);
+        const relevantHistory = history.filter(r => {
+            if (r.profile !== run.profile) return false;
+            if (r.device !== run.device) return false;
+            if (r.mode !== run.mode) return false;
+
+            if (isSpecial) {
+                if (!r.specialized?.enabled) return false;
+                return (
+                    (r.specialized.start || 'a').toLowerCase() === (run.specialized?.start || 'a').toLowerCase() &&
+                    (r.specialized.end || 'z').toLowerCase() === (run.specialized?.end || 'z').toLowerCase()
+                );
+            }
+
+            return !r.specialized?.enabled;
+        });
         const times = relevantHistory.map(r => r.time).sort((a,b) => a - b);
         
         const rank = times.findIndex(t => run.time <= t);
 
         if (rank === 0 && run.time < (times[1] ?? Infinity)) {
-            analysis.push("🚀 New Personal Best!");
+            analysis.push(isSpecial ? "🎯 New Specialized Best!" : "🚀 New Personal Best!");
         } else if (rank === -1) {
             analysis.push(`Your ${times.length + 1}${['st', 'nd', 'rd'][times.length] || 'th'} fastest run.`);
         } else {
@@ -536,14 +553,42 @@ const App: React.FC = () => {
     // --- UI COMPUTATIONS ---
     const deviceRecord = useMemo(() => {
         const bestTime = localData.history
-            .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice && r.mode === settings.mode)
+            .filter(r =>
+                r.profile === localData.currentProfile &&
+                r.device === localData.currentDevice &&
+                r.mode === settings.mode &&
+                !r.specialized?.enabled
+            )
             .reduce((min, r) => Math.min(min, r.time), Infinity);
         return bestTime === Infinity ? '--' : bestTime.toFixed(2);
     }, [localData, settings.mode]);
+
+    const specializedRecord = useMemo(() => {
+        if (!specializedPractice.enabled) return null;
+
+        const start = (specializedPractice.start || 'a').toLowerCase();
+        const end = (specializedPractice.end || 'z').toLowerCase();
+        const bestTime = localData.history
+            .filter(r =>
+                r.profile === localData.currentProfile &&
+                r.device === localData.currentDevice &&
+                r.mode === settings.mode &&
+                r.specialized?.enabled &&
+                (r.specialized.start || 'a').toLowerCase() === start &&
+                (r.specialized.end || 'z').toLowerCase() === end
+            )
+            .reduce((min, r) => Math.min(min, r.time), Infinity);
+        return bestTime === Infinity ? '--' : bestTime.toFixed(2);
+    }, [localData, settings.mode, specializedPractice.enabled, specializedPractice.end, specializedPractice.start]);
     
     const personalBestTime = useMemo(() => {
         const bestTime = localData.history
-            .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice && r.mode === settings.mode)
+            .filter(r =>
+                r.profile === localData.currentProfile &&
+                r.device === localData.currentDevice &&
+                r.mode === settings.mode &&
+                !r.specialized?.enabled
+            )
             .reduce((min, r) => Math.min(min, r.time), Infinity);
         return bestTime === Infinity ? null : bestTime;
     }, [localData, settings.mode]);
@@ -722,20 +767,170 @@ const App: React.FC = () => {
     const [patternEditorName, setPatternEditorName] = useState('');
     const [patternEditorMap, setPatternEditorMap] = useState<Record<string, string>>({});
 
-    const fingerOptions = useMemo(() => ([
-        { value: 'L5', label: 'L Pinky (L5)' },
-        { value: 'L4', label: 'L Ring (L4)' },
-        { value: 'L3', label: 'L Middle (L3)' },
-        { value: 'L2', label: 'L Index (L2)' },
-        { value: 'L1', label: 'L Thumb (L1)' },
-        { value: 'R1', label: 'R Thumb (R1)' },
-        { value: 'R2', label: 'R Index (R2)' },
-        { value: 'R3', label: 'R Middle (R3)' },
-        { value: 'R4', label: 'R Ring (R4)' },
-        { value: 'R5', label: 'R Pinky (R5)' },
-        { value: 'T1', label: 'Thumbs/Other (T1)' },
-        { value: '?', label: 'Unknown (?)' },
-    ]), []);
+    const getFingerUi = (code: string | undefined): { hand: 'L' | 'R' | 'O' | '?'; finger: '1' | '2' | '3' | '4' | '5' } => {
+        const c = (code || '?').toUpperCase();
+        if (c === 'T1') return { hand: 'O', finger: '1' };
+        if (c.startsWith('L') && ['1','2','3','4','5'].includes(c.slice(1))) return { hand: 'L', finger: c.slice(1) as any };
+        if (c.startsWith('R') && ['1','2','3','4','5'].includes(c.slice(1))) return { hand: 'R', finger: c.slice(1) as any };
+        return { hand: '?', finger: '2' };
+    };
+
+    const setFingerUi = (letter: string, hand: 'L' | 'R' | 'O' | '?', finger: '1' | '2' | '3' | '4' | '5') => {
+        const nextCode = hand === 'O' ? 'T1' : hand === '?' ? '?' : `${hand}${finger}`;
+        setPatternEditorMap(m => ({ ...m, [letter]: nextCode }));
+    };
+
+    // --- RHYTHM PATTERNS ---
+    const tonyRhythm = useMemo(() => ({
+        id: 'tony_default',
+        name: "Tony's Rhythm",
+        groupsRow1: TONY_GROUPS_ROW1,
+        groupsRow2: TONY_GROUPS_ROW2,
+    }), []);
+
+    const selectedRhythmPattern = useMemo<RhythmPattern | null>(() => {
+        const patterns = localData.rhythmPatterns || [];
+        const id = localData.selectedRhythmPatternId;
+        if (!id) return null;
+        return patterns.find(p => p.id === id) || null;
+    }, [localData.rhythmPatterns, localData.selectedRhythmPatternId]);
+
+    const activeRhythm = useMemo(() => {
+        return selectedRhythmPattern ? {
+            groupsRow1: selectedRhythmPattern.groupsRow1,
+            groupsRow2: selectedRhythmPattern.groupsRow2,
+            name: selectedRhythmPattern.name,
+        } : {
+            groupsRow1: tonyRhythm.groupsRow1,
+            groupsRow2: tonyRhythm.groupsRow2,
+            name: tonyRhythm.name,
+        };
+    }, [selectedRhythmPattern, tonyRhythm.groupsRow1, tonyRhythm.groupsRow2, tonyRhythm.name]);
+
+    const selectRhythm = (idOrNull: string | null) => {
+        setLocalData(d => ({ ...d, selectedRhythmPatternId: idOrNull }));
+    };
+
+    const [rhythmEditorOpen, setRhythmEditorOpen] = useState(false);
+    const [rhythmEditorId, setRhythmEditorId] = useState<string | null>(null);
+    const [rhythmEditorName, setRhythmEditorName] = useState('');
+    const [rhythmRow1End, setRhythmRow1End] = useState('p');
+    const [rhythmRow1Splits, setRhythmRow1Splits] = useState<boolean[]>([]);
+    const [rhythmRow2Splits, setRhythmRow2Splits] = useState<boolean[]>([]);
+
+    const buildSplitsFromGroups = (groups: string[][]): boolean[] => {
+        const letters = groups.flat();
+        if (letters.length <= 1) return [];
+        const splits = new Array(letters.length - 1).fill(false);
+        let cursor = 0;
+        for (let gi = 0; gi < groups.length - 1; gi++) {
+            cursor += groups[gi].length;
+            if (cursor - 1 >= 0 && cursor - 1 < splits.length) splits[cursor - 1] = true;
+        }
+        return splits;
+    };
+
+    const buildGroupsFromLettersAndSplits = (letters: string[], splits: boolean[]): string[][] => {
+        if (letters.length === 0) return [];
+        const out: string[][] = [];
+        let group: string[] = [letters[0]];
+        for (let i = 0; i < letters.length - 1; i++) {
+            const shouldSplit = Boolean(splits[i]);
+            const nextLetter = letters[i + 1];
+            if (shouldSplit) {
+                out.push(group);
+                group = [nextLetter];
+            } else {
+                group.push(nextLetter);
+            }
+        }
+        out.push(group);
+        return out;
+    };
+
+    const openCreateRhythm = () => {
+        setRhythmEditorId(null);
+        setRhythmEditorName('');
+        setRhythmRow1End('p');
+        const row1Letters = alphaLetters.slice(0, alphaLetters.indexOf('p') + 1);
+        const row2Letters = alphaLetters.slice(alphaLetters.indexOf('p') + 1);
+        setRhythmRow1Splits(new Array(Math.max(0, row1Letters.length - 1)).fill(false));
+        setRhythmRow2Splits(new Array(Math.max(0, row2Letters.length - 1)).fill(false));
+        setRhythmEditorOpen(true);
+    };
+
+    const openEditRhythm = (pattern: RhythmPattern) => {
+        setRhythmEditorId(pattern.id);
+        setRhythmEditorName(pattern.name);
+        const row1Letters = pattern.groupsRow1.flat();
+        const row2Letters = pattern.groupsRow2.flat();
+        setRhythmRow1End(row1Letters[row1Letters.length - 1] || 'p');
+        setRhythmRow1Splits(buildSplitsFromGroups(pattern.groupsRow1));
+        setRhythmRow2Splits(buildSplitsFromGroups(pattern.groupsRow2));
+        setRhythmEditorOpen(true);
+    };
+
+    const deleteRhythm = (id: string) => {
+        if (!window.confirm('Delete this rhythm pattern?')) return;
+        setLocalData(d => {
+            const patterns = (d.rhythmPatterns || []).filter(p => p.id !== id);
+            const selected = d.selectedRhythmPatternId === id ? null : d.selectedRhythmPatternId;
+            return { ...d, rhythmPatterns: patterns, selectedRhythmPatternId: selected };
+        });
+    };
+
+    const saveRhythm = () => {
+        const name = rhythmEditorName.trim();
+        if (!name) return;
+
+        const now = Date.now();
+        const id = rhythmEditorId || (globalThis.crypto?.randomUUID?.() ?? `rp_${now}_${Math.random().toString(16).slice(2)}`);
+        const endIdx = alphaLetters.indexOf((rhythmRow1End || 'p').toLowerCase());
+        const splitIdx = endIdx === -1 ? alphaLetters.indexOf('p') : endIdx;
+        const row1Letters = alphaLetters.slice(0, splitIdx + 1);
+        const row2Letters = alphaLetters.slice(splitIdx + 1);
+        const row1 = buildGroupsFromLettersAndSplits(row1Letters, rhythmRow1Splits);
+        const row2 = buildGroupsFromLettersAndSplits(row2Letters, rhythmRow2Splits);
+
+        const next: RhythmPattern = {
+            id,
+            name,
+            groupsRow1: row1,
+            groupsRow2: row2,
+            createdAt: rhythmEditorId ? (localData.rhythmPatterns?.find(p => p.id === rhythmEditorId)?.createdAt ?? now) : now,
+            updatedAt: now,
+        };
+
+        setLocalData(d => {
+            const patterns = d.rhythmPatterns || [];
+            const exists = patterns.some(p => p.id === id);
+            const updatedPatterns = exists ? patterns.map(p => p.id === id ? next : p) : [next, ...patterns];
+            return { ...d, rhythmPatterns: updatedPatterns, selectedRhythmPatternId: d.selectedRhythmPatternId || null };
+        });
+
+        setRhythmEditorOpen(false);
+        setRhythmEditorId(null);
+        setRhythmEditorName('');
+    };
+
+    const renderRhythmTemplate = (groupsRow1: string[][], groupsRow2: string[][]) => {
+        const renderGroup = (letters: string[]) => (
+            <div className="flex flex-wrap items-center gap-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
+                {letters.map(ch => (
+                    <div key={ch} className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        <span className="font-mono font-black text-slate-800 dark:text-white">{ch.toUpperCase()}</span>
+                    </div>
+                ))}
+            </div>
+        );
+
+        return (
+            <div className="space-y-3">
+                <div className="flex flex-wrap gap-3">{groupsRow1.map((g, idx) => <div key={`rr1_${idx}`}>{renderGroup(g)}</div>)}</div>
+                <div className="flex flex-wrap gap-3">{groupsRow2.map((g, idx) => <div key={`rr2_${idx}`}>{renderGroup(g)}</div>)}</div>
+            </div>
+        );
+    };
 
     const openCreatePattern = () => {
         setPatternEditorId(null);
@@ -817,7 +1012,7 @@ const App: React.FC = () => {
 
     // --- SPECIALIZED PRACTICE STATS (CURRENT RUN) ---
     const specializedRangeLetters = useMemo(() => {
-        if (!specializedPractice?.enabled) return [] as string[];
+        if (!specializedPractice.enabled) return [] as string[];
         const start = (specializedPractice.start || 'a').toLowerCase();
         const end = (specializedPractice.end || 'z').toLowerCase();
         const startIdx = alphaLetters.indexOf(start);
@@ -829,7 +1024,7 @@ const App: React.FC = () => {
     }, [alphaLetters, specializedPractice]);
 
     const currentRunLetterStats = useMemo(() => {
-        if (!specializedPractice?.enabled) return [] as Array<{ letter: string; attempts: number; correct: number; mistakes: number; accuracy: number; avg: number | null; }>;
+        if (!specializedPractice.enabled) return [] as Array<{ letter: string; attempts: number; correct: number; mistakes: number; accuracy: number; avg: number | null; }>;
 
         const durationsByLetter: Record<string, number[]> = {};
         for (const l of specializedRangeLetters) durationsByLetter[l] = [];
@@ -910,13 +1105,28 @@ const App: React.FC = () => {
                     ))}
                 </div>
                 
-                <div className="flex flex-wrap justify-center gap-4 mb-8 text-sm">
-                   {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && 
+                <div className="flex flex-wrap justify-center gap-3 mb-8 text-sm">
+                   {['classic', 'guinness'].includes(settings.mode) && 
                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                             <input type="checkbox" checked={currentProfileSettings.tonysRhythm} onChange={e => handleProfileSettingChange('tonysRhythm', e.target.checked)} className="accent-blue-500" />
-                            <span className="font-semibold text-slate-600 dark:text-slate-300">Tony's Rhythm</span>
+                            <span className="font-semibold text-slate-600 dark:text-slate-300">Rhythm Pattern</span>
                         </label>
                    }
+
+                   {currentProfileSettings.tonysRhythm && ['classic', 'guinness'].includes(settings.mode) && (
+                        <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                            <span className="font-semibold text-slate-600 dark:text-slate-300">Pattern</span>
+                            <select
+                                value={localData.selectedRhythmPatternId || ''}
+                                onChange={(e) => selectRhythm(e.target.value || null)}
+                                className="bg-transparent text-slate-700 dark:text-white text-sm font-bold outline-none"
+                            >
+                                <option value="">Tony's Rhythm</option>
+                                {(localData.rhythmPatterns || []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                        </div>
+                   )}
+
                    {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && 
                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                             <input type="checkbox" checked={currentProfileSettings.fingering} onChange={e => handleProfileSettingChange('fingering', e.target.checked)} className="accent-blue-500" />
@@ -941,13 +1151,13 @@ const App: React.FC = () => {
                     <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                         <input
                             type="checkbox"
-                            checked={Boolean(specializedPractice?.enabled)}
+                            checked={specializedPractice.enabled}
                             onChange={(e) => {
                                 const enabled = e.target.checked;
                                 setSettings(s => ({
                                     ...s,
                                     specializedPractice: {
-                                        ...(s.specializedPractice || DEFAULT_SETTINGS.specializedPractice),
+                                        ...s.specializedPractice,
                                         enabled,
                                     }
                                 }));
@@ -958,19 +1168,19 @@ const App: React.FC = () => {
                         <span className="font-semibold text-slate-600 dark:text-slate-300">Specialized Practice</span>
                     </label>
 
-                    {specializedPractice?.enabled && (
+                    {specializedPractice.enabled && (
                         <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
                             <span className="font-semibold text-slate-600 dark:text-slate-300">Range</span>
                             <select
-                                value={(specializedPractice.start || 'a').toLowerCase()}
+                                value={specializedPractice.start.toLowerCase()}
                                 onChange={(e) => {
                                     const start = e.target.value;
                                     setSettings(s => ({
                                         ...s,
                                         specializedPractice: {
-                                            ...(s.specializedPractice || DEFAULT_SETTINGS.specializedPractice),
+                                            ...s.specializedPractice,
                                             start,
-                                        } as SpecializedPracticeSettings
+                                        }
                                     }));
                                     resetGame();
                                 }}
@@ -980,15 +1190,15 @@ const App: React.FC = () => {
                             </select>
                             <span className="text-slate-400 font-bold">–</span>
                             <select
-                                value={(specializedPractice.end || 'z').toLowerCase()}
+                                value={specializedPractice.end.toLowerCase()}
                                 onChange={(e) => {
                                     const end = e.target.value;
                                     setSettings(s => ({
                                         ...s,
                                         specializedPractice: {
-                                            ...(s.specializedPractice || DEFAULT_SETTINGS.specializedPractice),
+                                            ...s.specializedPractice,
                                             end,
-                                        } as SpecializedPracticeSettings
+                                        }
                                     }));
                                     resetGame();
                                 }}
@@ -1016,8 +1226,13 @@ const App: React.FC = () => {
                 
                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                        <div className="text-[10px] uppercase font-bold text-slate-400">Mode Record</div>
-                        <div className="text-2xl font-black text-blue-500 font-mono">{deviceRecord}</div>
+                        <div className="text-[10px] uppercase font-bold text-slate-400">
+                            {specializedPractice.enabled ? `Specialized Record (${specializedPractice.start.toUpperCase()}–${specializedPractice.end.toUpperCase()})` : 'Mode Record'}
+                        </div>
+                        <div className="text-2xl font-black text-blue-500 font-mono">{specializedPractice.enabled ? (specializedRecord || '--') : deviceRecord}</div>
+                        {specializedPractice.enabled && (
+                            <div className="mt-1 text-[10px] uppercase tracking-widest font-bold text-slate-400">Full record: {deviceRecord}</div>
+                        )}
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
                         <div className="text-[10px] uppercase font-bold text-slate-400">Current Time</div>
@@ -1050,13 +1265,50 @@ const App: React.FC = () => {
                        {settings.mode === 'flash' && <div id="flash-letter" className="text-slate-800 dark:text-white transition-colors duration-100">{targetSequence[gameState.index]?.toUpperCase() || 'A'}</div>}
                        {settings.mode === 'blank' && <textarea ref={blankInputRef} value={targetSequence.slice(0, gameState.index).join('')} onChange={handleBlankInputChange} className="w-full h-full p-4 text-2xl font-mono resize-none rounded-lg bg-slate-50 dark:bg-slate-850 text-slate-800 dark:text-white border-2 border-slate-300 dark:border-slate-700 focus:border-blue-500 outline-none" autoCorrect="off" autoCapitalize="off" autoComplete="off" spellCheck="false" rows={5} placeholder="Start typing sequence..." />}
                        {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && (
-                            <div className="flex flex-wrap justify-center gap-2 max-w-4xl">
-                                {targetSequence.map((char, i) => {
-                                    const code = activeFingeringMap[char] || '?';
-                                    const data: FingeringDataItem = { char, code };
-                                    return <LetterBox key={i} data={data} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />
-                                })}
-                            </div>
+                            <>
+                                {currentProfileSettings.tonysRhythm && ['classic', 'guinness'].includes(settings.mode) ? (
+                                    <div className="w-full flex flex-col items-center gap-3">
+                                        <div className="text-[10px] uppercase tracking-widest font-bold text-slate-400">{activeRhythm.name}</div>
+                                        <div className="flex flex-col gap-3">
+                                            {[activeRhythm.groupsRow1, activeRhythm.groupsRow2].map((row, rowIdx) => (
+                                                <div key={`rh_row_${rowIdx}`} className="flex flex-wrap justify-center gap-3">
+                                                    {row.map((group, gi) => {
+                                                        const filtered = group.filter(ch => targetSequence.includes(ch));
+                                                        if (filtered.length === 0) return null;
+                                                        return (
+                                                            <div key={`rh_g_${rowIdx}_${gi}`} className="flex flex-wrap justify-center gap-2 bg-white/60 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
+                                                                {filtered.map(ch => {
+                                                                    const idx = targetSequence.indexOf(ch);
+                                                                    const code = activeFingeringMap[ch] || '?';
+                                                                    const data: FingeringDataItem = { char: ch, code };
+                                                                    return (
+                                                                        <LetterBox
+                                                                            key={`${ch}_${idx}`}
+                                                                            data={data}
+                                                                            index={idx}
+                                                                            currentIndex={gameState.index}
+                                                                            showFingering={currentProfileSettings.fingering}
+                                                                            isCorrect={idx < gameState.index}
+                                                                        />
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-wrap justify-center gap-2 max-w-4xl">
+                                        {targetSequence.map((char, i) => {
+                                            const code = activeFingeringMap[char] || '?';
+                                            const data: FingeringDataItem = { char, code };
+                                            return <LetterBox key={i} data={data} index={i} currentIndex={gameState.index} showFingering={currentProfileSettings.fingering} isCorrect={i < gameState.index} />
+                                        })}
+                                    </div>
+                                )}
+                            </>
                        )}
                     </div>
 
@@ -1093,7 +1345,7 @@ const App: React.FC = () => {
                         </table>
                     </div>
 
-                    {specializedPractice?.enabled && (
+                    {specializedPractice.enabled && (
                         <div className="mt-4">
                             <div className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-2">Specialized Practice: Per-letter Analysis</div>
                             <div className="overflow-x-auto bg-slate-50 dark:bg-slate-850 p-3 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-700">
@@ -1202,20 +1454,45 @@ const App: React.FC = () => {
                         </div>
 
                         <div className="mt-5">
-                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Per-letter finger (L/R + finger)</div>
+                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Per-letter finger</div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                                {alphaLetters.map(letter => (
-                                    <div key={`fp_${letter}`} className="flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
-                                        <div className="font-mono font-black text-slate-800 dark:text-white">{letter.toUpperCase()}</div>
-                                        <select
-                                            value={patternEditorMap[letter] || '?'}
-                                            onChange={(e) => setPatternEditorMap(m => ({ ...m, [letter]: e.target.value }))}
-                                            className="bg-transparent text-slate-700 dark:text-white text-sm font-bold outline-none"
-                                        >
-                                            {fingerOptions.map(o => <option key={`${letter}_${o.value}`} value={o.value}>{o.label}</option>)}
-                                        </select>
-                                    </div>
-                                ))}
+                                {alphaLetters.map(letter => {
+                                    const ui = getFingerUi(patternEditorMap[letter]);
+                                    const activeBtn = 'bg-blue-600 text-white';
+                                    const inactiveBtn = 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700';
+                                    return (
+                                        <div key={`fp_${letter}`} className="flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
+                                            <div className="font-mono font-black text-slate-800 dark:text-white">{letter.toUpperCase()}</div>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+                                                    <button type="button" onClick={() => setFingerUi(letter, 'L', ui.finger)} className={`px-2 py-1 text-xs font-black ${ui.hand === 'L' ? activeBtn : inactiveBtn}`}>L</button>
+                                                    <button type="button" onClick={() => setFingerUi(letter, 'R', ui.finger)} className={`px-2 py-1 text-xs font-black ${ui.hand === 'R' ? activeBtn : inactiveBtn}`}>R</button>
+                                                    <button type="button" onClick={() => setFingerUi(letter, 'O', ui.finger)} className={`px-2 py-1 text-xs font-black ${ui.hand === 'O' ? activeBtn : inactiveBtn}`}>Other</button>
+                                                    <button type="button" onClick={() => setFingerUi(letter, '?', ui.finger)} className={`px-2 py-1 text-xs font-black ${ui.hand === '?' ? activeBtn : inactiveBtn}`}>?</button>
+                                                </div>
+
+                                                {(ui.hand === 'L' || ui.hand === 'R') ? (
+                                                    <select
+                                                        value={ui.finger}
+                                                        onChange={(e) => setFingerUi(letter, ui.hand, e.target.value as any)}
+                                                        className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-white text-xs font-black outline-none"
+                                                        aria-label={`${letter.toUpperCase()} finger`}
+                                                    >
+                                                        <option value="1">1</option>
+                                                        <option value="2">2</option>
+                                                        <option value="3">3</option>
+                                                        <option value="4">4</option>
+                                                        <option value="5">5</option>
+                                                    </select>
+                                                ) : (
+                                                    <span className="px-2 py-1 rounded-lg bg-white/70 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 text-[10px] font-black text-slate-500 dark:text-slate-300">
+                                                        {ui.hand === 'O' ? 'T1' : '--'}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
 
@@ -1236,6 +1513,171 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 )}
+
+                {/* RHYTHM PATTERNS */}
+                <div className="mt-8">
+                    <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Rhythm Patterns (Classic / Guinness)</div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Default</div>
+                                    <div className="text-lg font-black text-slate-800 dark:text-white">Tony's Rhythm</div>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => selectRhythm(null)} className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700">Use in Practice</button>
+                                    <button onClick={() => setView('about')} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">About Tony</button>
+                                </div>
+                            </div>
+
+                            <div className="mt-4">{renderRhythmTemplate(TONY_GROUPS_ROW1, TONY_GROUPS_ROW2)}</div>
+                        </div>
+
+                        <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-xs font-bold uppercase tracking-widest text-slate-400">My Rhythms</div>
+                                    <div className="text-lg font-black text-slate-800 dark:text-white">Custom Patterns</div>
+                                </div>
+                                <button onClick={openCreateRhythm} className="bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-green-700">New Rhythm</button>
+                            </div>
+
+                            {(localData.rhythmPatterns || []).length === 0 ? (
+                                <div className="mt-4 text-sm text-slate-500 dark:text-slate-400">No custom rhythms yet. Build one like “Bob's Rhythm”.</div>
+                            ) : (
+                                <div className="mt-4 space-y-2">
+                                    {(localData.rhythmPatterns || []).map(p => (
+                                        <div key={p.id} className="flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2">
+                                            <div className="min-w-0">
+                                                <div className="font-bold text-slate-800 dark:text-white truncate">{p.name}</div>
+                                                <div className="text-[11px] text-slate-500 dark:text-slate-400">Updated {new Date(p.updatedAt).toLocaleDateString()}</div>
+                                            </div>
+                                            <div className="flex gap-2 flex-none">
+                                                <button onClick={() => selectRhythm(p.id)} className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700">Use</button>
+                                                <button onClick={() => openEditRhythm(p)} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700">Edit</button>
+                                                <button onClick={() => deleteRhythm(p.id)} className="bg-red-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-red-700">Delete</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {selectedRhythmPattern && (
+                        <div className="mt-6 bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Selected</div>
+                                    <div className="text-lg font-black text-slate-800 dark:text-white">{selectedRhythmPattern.name}</div>
+                                </div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400">Shown when Rhythm Pattern is enabled in Practice.</div>
+                            </div>
+                            <div className="mt-4">{renderRhythmTemplate(selectedRhythmPattern.groupsRow1, selectedRhythmPattern.groupsRow2)}</div>
+                        </div>
+                    )}
+
+                    {rhythmEditorOpen && (
+                        <div className="mt-6 bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                            <div className="flex items-center justify-between gap-3">
+                                <div className="text-lg font-black text-slate-800 dark:text-white">{rhythmEditorId ? 'Edit Rhythm' : 'New Rhythm'}</div>
+                                <button onClick={() => { setRhythmEditorOpen(false); setRhythmEditorId(null); }} className="text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 text-xs font-bold uppercase">Close</button>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Name</label>
+                                    <input value={rhythmEditorName} onChange={e => setRhythmEditorName(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500" placeholder="Bob's Rhythm" />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Row 1 ends at</label>
+                                    <select
+                                        value={rhythmRow1End}
+                                        onChange={(e) => {
+                                            const v = e.target.value;
+                                            setRhythmRow1End(v);
+                                            const endIdx = alphaLetters.indexOf(v);
+                                            const row1Letters = alphaLetters.slice(0, (endIdx === -1 ? alphaLetters.indexOf('p') : endIdx) + 1);
+                                            const row2Letters = alphaLetters.slice((endIdx === -1 ? alphaLetters.indexOf('p') : endIdx) + 1);
+                                            setRhythmRow1Splits(new Array(Math.max(0, row1Letters.length - 1)).fill(false));
+                                            setRhythmRow2Splits(new Array(Math.max(0, row2Letters.length - 1)).fill(false));
+                                        }}
+                                        className="w-full mt-1 px-3 py-2 rounded-lg bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                        {alphaLetters.map(l => <option key={`r1end_${l}`} value={l}>{l.toUpperCase()}</option>)}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="mt-5">
+                                <div className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase mb-2">Build groups (toggle splits between letters)</div>
+
+                                {(() => {
+                                    const endIdx = alphaLetters.indexOf(rhythmRow1End);
+                                    const splitIdx = endIdx === -1 ? alphaLetters.indexOf('p') : endIdx;
+                                    const row1Letters = alphaLetters.slice(0, splitIdx + 1);
+                                    const row2Letters = alphaLetters.slice(splitIdx + 1);
+
+                                    const renderRow = (letters: string[], splits: boolean[], setSplits: (next: boolean[]) => void, label: string) => (
+                                        <div className="mb-4">
+                                            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-2">{label}</div>
+                                            <div className="flex flex-wrap items-center gap-1 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-3">
+                                                {letters.map((l, i) => (
+                                                    <React.Fragment key={`${label}_${l}`}
+                                                    >
+                                                        <div className="px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 font-mono font-black text-slate-800 dark:text-white">{l.toUpperCase()}</div>
+                                                        {i < letters.length - 1 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                    const next = [...splits];
+                                                                    next[i] = !next[i];
+                                                                    setSplits(next);
+                                                                }}
+                                                                className={`w-2 h-8 rounded-full border ${splits[i] ? 'bg-blue-600 border-blue-700' : 'bg-slate-200 dark:bg-slate-700 border-slate-300 dark:border-slate-600'}`}
+                                                                title={splits[i] ? 'Split here' : 'No split'}
+                                                                aria-label={`Toggle split after ${l.toUpperCase()}`}
+                                                            />
+                                                        )}
+                                                    </React.Fragment>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+
+                                    return (
+                                        <>
+                                            {renderRow(row1Letters, rhythmRow1Splits, setRhythmRow1Splits, 'Row 1')}
+                                            {renderRow(row2Letters, rhythmRow2Splits, setRhythmRow2Splits, 'Row 2')}
+                                        </>
+                                    );
+                                })()}
+                            </div>
+
+                            <div className="mt-5 flex gap-2">
+                                <button
+                                    onClick={saveRhythm}
+                                    disabled={!rhythmEditorName.trim()}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:bg-blue-400"
+                                >
+                                    Save Rhythm
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setRhythmRow1End('p');
+                                        const row1Letters = alphaLetters.slice(0, alphaLetters.indexOf('p') + 1);
+                                        const row2Letters = alphaLetters.slice(alphaLetters.indexOf('p') + 1);
+                                        setRhythmRow1Splits(new Array(Math.max(0, row1Letters.length - 1)).fill(false));
+                                        setRhythmRow2Splits(new Array(Math.max(0, row2Letters.length - 1)).fill(false));
+                                    }}
+                                    className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
+                                >
+                                    Reset
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
 
             <div className={view !== 'analytics' ? 'hidden' : ''}>
@@ -1335,12 +1777,16 @@ const App: React.FC = () => {
                              {sortedHistory.filter(r => r.profile === localData.currentProfile).length === 0 ?
                               <tr><td colSpan={7} className="p-8 text-center text-slate-400 italic">No history yet. Start practice!</td></tr> :
                               sortedHistory.filter(r => r.profile === localData.currentProfile).map(r => (
-                                 <tr key={r.timestamp} className={`hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${r.time === personalBestTime ? 'bg-amber-50 dark:bg-amber-900/20' : ''}`}>
-                                    <td className="px-3 sm:px-4 py-2 text-[10px] sm:text-xs uppercase font-bold text-blue-500 whitespace-nowrap">{r.mode} {r.blind ? '(Blind)' : ''}</td>
+                                 <tr key={r.timestamp} className={`hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${(!r.specialized?.enabled && r.time === personalBestTime) ? 'bg-amber-50 dark:bg-amber-900/20' : ''}`}>
+                                    <td className="px-3 sm:px-4 py-2 text-[10px] sm:text-xs uppercase font-bold text-blue-500 whitespace-nowrap">
+                                        {r.mode}
+                                        {r.specialized?.enabled ? ` [${r.specialized.start.toUpperCase()}-${r.specialized.end.toUpperCase()}]` : ''}
+                                        {r.blind ? ' (Blind)' : ''}
+                                    </td>
                                     <td className="hidden sm:table-cell px-3 sm:px-4 py-2 text-xs text-slate-500">{r.device}</td>
                                     <td className="px-3 sm:px-4 py-2 font-mono font-bold whitespace-nowrap">
                                         {r.time.toFixed(2)}s
-                                        {r.time === personalBestTime && <span className="ml-2 text-amber-500" title="Personal Best">★</span>}
+                                        {!r.specialized?.enabled && r.time === personalBestTime && <span className="ml-2 text-amber-500" title="Personal Best">★</span>}
                                     </td>
                                     <td className="px-3 sm:px-4 py-2 text-red-500 font-bold whitespace-nowrap">{r.mistakes}</td>
                                     <td className="px-3 sm:px-4 py-2 text-xs whitespace-nowrap">{new Date(r.timestamp).toLocaleDateString()}</td>

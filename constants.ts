@@ -45,6 +45,8 @@ export const DEFAULT_LOCAL_DATA: LocalData = {
     },
     fingerPatterns: [],
     selectedFingerPatternId: null,
+    rhythmPatterns: [],
+    selectedRhythmPatternId: null,
 };
 
 export const DEFAULT_SETTINGS: Settings = {

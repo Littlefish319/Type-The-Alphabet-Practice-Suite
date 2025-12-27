@@ -12,6 +12,15 @@ export interface FingerPattern {
     updatedAt: number;
 }
 
+export interface RhythmPattern {
+    id: string;
+    name: string;
+    groupsRow1: string[][];
+    groupsRow2: string[][];
+    createdAt: number;
+    updatedAt: number;
+}
+
 export interface SpecializedPracticeSettings {
     enabled: boolean;
     start: string;
@@ -67,6 +76,10 @@ export interface LocalData {
     // Custom finger patterns
     fingerPatterns?: FingerPattern[];
     selectedFingerPatternId?: string | null;
+
+    // Custom rhythm patterns
+    rhythmPatterns?: RhythmPattern[];
+    selectedRhythmPatternId?: string | null;
 }
 
 export interface Settings {
