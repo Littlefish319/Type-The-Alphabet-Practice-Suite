@@ -1,11 +1,9 @@
 import { GoogleGenAI } from "@google/genai";
 
 export const getCoachingTip = async (prompt: string): Promise<string> => {
-    // The API key must be obtained exclusively from the environment variable process.env.API_KEY.
-    // Create a new GoogleGenAI instance right before making an API call.
-    const apiKey = process.env.API_KEY;
+    const apiKey = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
     if (!apiKey) {
-        return "Gemini API key not configured. Please set the API_KEY environment variable.";
+        return "Gemini API key not configured. Please set VITE_GEMINI_API_KEY in .env.local.";
     }
 
     const ai = new GoogleGenAI({ apiKey });

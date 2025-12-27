@@ -1,6 +1,6 @@
 
 export type GameMode = 'classic' | 'blank' | 'flash' | 'guinness' | 'backwards' | 'spaces' | 'backwards-spaces';
-export type View = 'practice' | 'analytics' | 'history';
+export type View = 'practice' | 'analytics' | 'history' | 'about';
 
 export interface FingeringDataItem {
     char: string;

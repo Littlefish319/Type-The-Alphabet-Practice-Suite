@@ -614,7 +614,7 @@ const App: React.FC = () => {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b border-slate-100 dark:border-slate-700 pb-4">
                 <div>
                     <h1 className="text-2xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500">
-                        A-Z World Record Suite
+                        Alphabet Typing Suite
                     </h1>
                 </div>
                 <div className="flex flex-wrap gap-3 items-center">
@@ -641,6 +641,7 @@ const App: React.FC = () => {
                 <button onClick={() => setView('practice')} className={view === 'practice' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Practice & Record</button>
                 <button onClick={() => setView('analytics')} className={view === 'analytics' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Analytics & Coach</button>
                 <button onClick={() => setView('history')} className={view === 'history' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Run History</button>
+                <button onClick={() => setView('about')} className={view === 'about' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>About</button>
             </div>
             
              {/* Views */}
@@ -859,6 +860,52 @@ const App: React.FC = () => {
                              }
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <div className={view !== 'about' ? 'hidden' : ''}>
+                {/* ABOUT VIEW */}
+                <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 md:p-8">
+                    <div className="max-w-3xl">
+                        <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Engineered for</div>
+                        <h2 className="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mt-1">
+                            Pure Speed.
+                        </h2>
+
+                        <div className="mt-5 space-y-4 text-sm md:text-base text-slate-600 dark:text-slate-300 leading-relaxed">
+                            <p>
+                                Alphabet Typing Suite was born from a pursuit of the impossible. Created by Xiaoyu Tang, a speed typing phenom who shattered
+                                records with an incredible 1.21-second alphabet run.
+                            </p>
+                            <p>
+                                At this level, typing is no longer about hitting keys; it's about rhythm. Xiaoyu developed the "Tony's Rhythm" technique to group
+                                letters into melodic patterns, reducing cognitive load and maximizing muscular efficiency.
+                            </p>
+                        </div>
+
+                        <div className="mt-6 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5">
+                            <p className="text-slate-700 dark:text-slate-200 italic leading-relaxed">
+                                "I built this app because standard trainers couldn't keep up with world-record speeds. The Alphabet Typing Suite treats the keyboard
+                                like a musical instrument."
+                            </p>
+                            <div className="mt-3 text-sm font-bold text-slate-500 dark:text-slate-400">— Xiaoyu Tang</div>
+                        </div>
+                    </div>
+
+                    <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
+                            <div className="text-[10px] uppercase font-bold text-slate-400">Xiaoyu's Best</div>
+                            <div className="text-3xl font-black text-blue-500 font-mono">1.21s</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
+                            <div className="text-[10px] uppercase font-bold text-slate-400">Technique</div>
+                            <div className="text-2xl font-black text-slate-800 dark:text-white">Tony's Rhythm</div>
+                        </div>
+                        <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
+                            <div className="text-[10px] uppercase font-bold text-slate-400">Keys/Sec</div>
+                            <div className="text-2xl font-black text-slate-800 dark:text-white font-mono">21.48 KPS</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

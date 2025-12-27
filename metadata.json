@@ -1,5 +1,5 @@
 {
-  "name": "A-Z World Record Suite",
-  "description": "An advanced tool for practicing and analyzing A-Z speed typing runs. Features multiple modes, detailed analytics, run history, and an AI Speed Coach powered by Gemini to provide personalized feedback.",
+  "name": "Alphabet Typing Suite",
+  "description": "An advanced tool for practicing and analyzing alphabet speed typing runs. Features multiple modes, detailed analytics, run history, and an AI Speed Coach powered by Gemini to provide personalized feedback.",
   "requestFramePermissions": []
 }
