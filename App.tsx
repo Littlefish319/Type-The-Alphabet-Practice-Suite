@@ -265,7 +265,7 @@ const App: React.FC = () => {
     const [isCoachLoading, setIsCoachLoading] = useState(false);
 
     const timerIntervalRef = useRef<number | null>(null);
-    const hiddenInputRef = useRef<HTMLInputElement>(null);
+    const hiddenInputRef = useRef<HTMLTextAreaElement>(null);
     const blankInputRef = useRef<HTMLTextAreaElement>(null);
     const runNoteRef = useRef<HTMLTextAreaElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -556,21 +556,47 @@ const App: React.FC = () => {
     }, [localData.currentProfile, localData.profileSettings]);
 
     // --- FOCUS MANAGEMENT ---
+    const blurTypingInputs = useCallback(() => {
+        keyboardRequestedRef.current = false;
+        try {
+            (hiddenInputRef.current as any)?.blur?.();
+        } catch {
+            // ignore
+        }
+        try {
+            (blankInputRef.current as any)?.blur?.();
+        } catch {
+            // ignore
+        }
+    }, []);
+
     const focusCorrectInput = useCallback(() => {
-        // On iOS native, avoid automatic focus changes (causes keyboard pop/bounce).
-        // We only focus the typing input after an explicit user gesture.
+        // iOS native: do not auto-focus (causes bounce + the <> Done bar).
         if (isNativeIOS && !keyboardRequestedRef.current) return;
 
         if (resultsModalOpen) {
-            runNoteRef.current?.focus();
-        } else if (view === 'practice') {
-            if (settings.mode === 'blank') {
-                blankInputRef.current?.focus();
-            } else {
-                hiddenInputRef.current?.focus();
-            }
+            // Don't auto-focus the note on iOS; user can tap it.
+            if (!isNativeIOS) runNoteRef.current?.focus();
+            return;
         }
-    }, [isNativeIOS, view, settings.mode, resultsModalOpen]);
+
+        if (view !== 'practice') return;
+
+        if (settings.mode === 'blank') {
+            if (!isNativeIOS || !gameState.finished) {
+                blankInputRef.current?.focus();
+            }
+            return;
+        }
+
+        // Non-blank: on iOS only focus during countdown/active run.
+        if (isNativeIOS) {
+            const shouldFocus = Boolean(countdown) || (gameState.started && !gameState.finished);
+            if (!shouldFocus) return;
+        }
+
+        hiddenInputRef.current?.focus();
+    }, [countdown, gameState.finished, gameState.started, isNativeIOS, resultsModalOpen, settings.mode, view]);
 
     const requestKeyboard = useCallback(() => {
         if (resultsModalOpen || managementModalOpen) return;
@@ -595,7 +621,7 @@ const App: React.FC = () => {
         } catch {
             el.focus();
         }
-    }, [blankInputRef, hiddenInputRef, managementModalOpen, resultsModalOpen, settings.mode, view]);
+    }, [managementModalOpen, resultsModalOpen, settings.mode, view]);
 
     useEffect(() => {
        focusCorrectInput();
@@ -604,14 +630,15 @@ const App: React.FC = () => {
     useEffect(() => {
         // When leaving practice or opening modals, stop trying to keep the typing input focused.
         if (view !== 'practice' || resultsModalOpen || managementModalOpen) {
-            keyboardRequestedRef.current = false;
+            blurTypingInputs();
         }
-    }, [managementModalOpen, resultsModalOpen, view]);
+    }, [blurTypingInputs, managementModalOpen, resultsModalOpen, view]);
 
     // --- GAME LOGIC ---
 
     const resetGame = useCallback((newMode?: GameMode) => {
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        blurTypingInputs();
         setGameState(INITIAL_GAME_STATE);
         setCurrentTime(0);
         setResultsModalOpen(false);
@@ -623,7 +650,7 @@ const App: React.FC = () => {
              setSettings(s => ({...s, mode: newMode}));
         }
         setTimeout(focusCorrectInput, 50);
-    }, [focusCorrectInput]);
+    }, [blurTypingInputs, focusCorrectInput]);
 
     const beginRun = useCallback((processFirstKey: boolean = false) => {
         const now = performance.now();
@@ -742,9 +769,12 @@ const App: React.FC = () => {
         const timeSpeech = finalTime.toFixed(2).replace('.', ' point ');
         speak(`Done! Time is ${timeSpeech} seconds, with ${gameState.mistakes} mistakes.`, settings.sound, settings.voice);
         playSound('win', settings.sound);
+
+        // Hide keyboard/accessory bar unless user explicitly taps into the note.
+        blurTypingInputs();
         
         setResultsModalOpen(true);
-    }, [gameState.mistakeLog, localData, settings, gameState.mistakes, specializedPractice]);
+    }, [blurTypingInputs, deviceIdentity?.deviceId, deviceIdentity?.deviceLabel, deviceIdentity?.platform, gameState.mistakeLog, gameState.mistakes, generatePostRunAnalysis, localData.currentDevice, localData.currentProfile, localData.history, settings.blind, settings.mode, settings.sound, settings.voice, specializedPractice]);
 
 
     // --- EVENT HANDLERS ---
@@ -823,7 +853,7 @@ const App: React.FC = () => {
         targetSequence
     ]);
 
-    const handleHiddenInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleHiddenInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
         const raw = e.target.value;
         if (!raw) return;
 
@@ -1595,8 +1625,8 @@ const App: React.FC = () => {
             <div
                 className={
                     professionalMode
-                        ? 'flex flex-nowrap overflow-x-auto gap-2 mb-6 text-[11px] font-black uppercase tracking-wide bg-white/70 dark:bg-slate-900/50 border border-slate-200/70 dark:border-slate-700/60 rounded-2xl p-1 backdrop-blur whitespace-nowrap'
-                        : 'flex flex-nowrap overflow-x-auto gap-6 mb-6 text-sm font-bold uppercase tracking-wide whitespace-nowrap px-1'
+                        ? 'flex flex-wrap sm:flex-nowrap sm:overflow-x-auto overflow-x-visible gap-2 mb-6 text-[11px] font-black uppercase tracking-wide bg-white/70 dark:bg-slate-900/50 border border-slate-200/70 dark:border-slate-700/60 rounded-2xl p-1 backdrop-blur whitespace-normal sm:whitespace-nowrap'
+                        : 'flex flex-wrap sm:flex-nowrap sm:overflow-x-auto overflow-x-visible gap-3 sm:gap-6 mb-6 text-sm font-bold uppercase tracking-wide whitespace-normal sm:whitespace-nowrap px-1'
                 }
             >
                 <button
@@ -1676,9 +1706,9 @@ const App: React.FC = () => {
              {/* Views */}
             <div className={view !== 'practice' ? 'hidden' : ''}>
                 {/* PRACTICE VIEW */}
-                <div className="flex flex-nowrap justify-start gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl w-full overflow-x-auto whitespace-nowrap">
+                <div className="flex flex-wrap sm:flex-nowrap justify-start gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl w-full overflow-x-visible sm:overflow-x-auto whitespace-normal sm:whitespace-nowrap">
                     {(['classic', 'backwards', 'spaces', 'backwards-spaces', 'blank', 'flash', 'guinness'] as GameMode[]).map(m => (
-                        <button key={m} onClick={() => resetGame(m)} className={`flex-none px-4 py-2 rounded-lg text-[11px] font-bold transition ${settings.mode === m ? 'bg-white dark:bg-slate-700 shadow text-blue-600 dark:text-blue-300 scale-105' : 'text-slate-500 hover:bg-white/50'}`}>
+                        <button key={m} onClick={() => resetGame(m)} className={`px-4 py-2 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${settings.mode === m ? 'bg-white dark:bg-slate-700 shadow text-blue-600 dark:text-blue-300 scale-105' : 'text-slate-500 hover:bg-white/50'}`}>
                              {m.includes('backwards') ? (m.includes('spaces') ? 'Z Y X' : 'Z-A') : m.includes('spaces') ? 'A B C' : <span className="capitalize">{m} {m==='blank' ? 'Typing' : m==='flash' ? 'Flash' : 'Grid' }</span>}
                         </button>
                     ))}
@@ -1839,10 +1869,29 @@ const App: React.FC = () => {
                 <div
                     className={`relative min-h-[320px] sm:min-h-[350px] flex flex-col items-center justify-center bg-slate-100 dark:bg-slate-800/50 rounded-2xl p-4 sm:p-8 overflow-hidden transition-all duration-300 ${isError ? 'animate-shake' : ''} ${settings.mode === 'guinness' && gameState.started && !gameState.finished ? 'border-2 border-red-500 shadow-lg shadow-red-500/10' : 'border border-slate-200 dark:border-slate-800'}`}
                     onPointerDown={() => {
-                        requestKeyboard();
+                        if (!gameState.finished) requestKeyboard();
                         ensureAudioContext();
                     }}
                 >
+                    {settings.mode !== 'blank' && (
+                        <textarea
+                            ref={hiddenInputRef}
+                            className="absolute left-0 top-0 w-[1px] h-[1px] opacity-0"
+                            inputMode="text"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            autoComplete="off"
+                            spellCheck={false}
+                            aria-hidden="true"
+                            onChange={handleHiddenInputChange}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    resetGame();
+                                }
+                            }}
+                        />
+                    )}
                     {countdown && 
                         <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center backdrop-blur-sm">
                             <div className="text-7xl sm:text-9xl font-black text-white animate-pulse">{countdown}</div>
@@ -2787,25 +2836,6 @@ const App: React.FC = () => {
                 </div>
             </div>
         }
-
-        <input
-            type="text"
-            ref={hiddenInputRef}
-            // Use a tiny (but focusable) input so iOS reliably shows the software keyboard.
-            className="fixed top-0 left-0 w-[1px] h-[1px] opacity-0"
-            inputMode="text"
-            autoCorrect="off"
-            autoCapitalize="off"
-            autoComplete="off"
-            spellCheck={false}
-            onChange={handleHiddenInputChange}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    resetGame();
-                }
-            }}
-        />
 
         </div>
         </>
