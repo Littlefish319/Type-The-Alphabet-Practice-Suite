@@ -2444,6 +2444,9 @@ const App: React.FC = () => {
                             <div className="mt-5 space-y-4">
                                 <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5">
                                     <div className="text-sm font-bold text-slate-800 dark:text-slate-200">Sign in / Sign up</div>
+                                    <div className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+                                        Recommended: use <span className="font-bold">Google sign-in</span> on web for the smoothest cross-device login. Email/password works too, but can be finicky (password reset emails may land in Spam, and autofill/extra spaces can cause sign-in errors).
+                                    </div>
                                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                                         <div>
                                             <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Email</label>
