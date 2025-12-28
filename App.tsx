@@ -1511,8 +1511,8 @@ const App: React.FC = () => {
         <div
             className={
                 professionalMode
-                    ? 'relative min-h-[100dvh] w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 px-3 sm:px-6 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
-                    : 'min-h-[100dvh] w-full flex justify-center bg-slate-50 dark:bg-slate-950 px-3 sm:px-6 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+                    ? 'relative h-[100dvh] w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 px-3 sm:px-6 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+                    : 'h-[100dvh] w-full flex justify-center bg-slate-50 dark:bg-slate-950 px-3 sm:px-6 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
             }
         >
         {professionalMode && (
@@ -1525,8 +1525,8 @@ const App: React.FC = () => {
         <div
             className={
                 professionalMode
-                    ? 'relative w-full max-w-6xl bg-white/80 dark:bg-slate-900/70 shadow-2xl rounded-3xl p-4 sm:p-6 md:p-8 mt-4 border border-slate-200/70 dark:border-slate-800/80 ring-1 ring-slate-200/60 dark:ring-slate-700/60 backdrop-blur-xl'
-                    : 'w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 sm:p-6 md:p-8 mt-4 border border-slate-200 dark:border-slate-800'
+                    ? 'relative w-full max-w-6xl bg-white/80 dark:bg-slate-900/70 shadow-2xl rounded-3xl p-4 sm:p-6 md:p-8 mt-4 mb-4 border border-slate-200/70 dark:border-slate-800/80 ring-1 ring-slate-200/60 dark:ring-slate-700/60 backdrop-blur-xl'
+                    : 'w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 sm:p-6 md:p-8 mt-4 mb-4 border border-slate-200 dark:border-slate-800'
             }
         >
             {/* Header */}
@@ -2718,8 +2718,8 @@ const App: React.FC = () => {
 
         {/* RESULTS MODAL */}
         {resultsModalOpen && 
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-md p-4 transition-opacity">
-                <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-700 transform transition-all scale-100">
+            <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-md p-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-[calc(env(safe-area-inset-bottom)+1rem)] transition-opacity">
+                <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-700 transform transition-all scale-100 mx-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] overflow-y-auto">
                      <div className="text-center">
                         <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">New Run Completed!</div>
                         <div className="text-6xl font-black text-slate-800 dark:text-white font-mono tracking-tighter mb-1">{currentTime.toFixed(2)}s</div>
@@ -2748,8 +2748,8 @@ const App: React.FC = () => {
         
         {/* MANAGEMENT MODAL */}
         {managementModalOpen && 
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-md p-4 transition-opacity">
-                 <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-lg w-full border border-slate-200 dark:border-slate-700 transform transition-all scale-100">
+              <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-md p-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-[calc(env(safe-area-inset-bottom)+1rem)] transition-opacity">
+                  <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-lg w-full border border-slate-200 dark:border-slate-700 transform transition-all scale-100 mx-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] overflow-y-auto">
                     <h3 className="text-xl font-bold mb-4 border-b pb-2 text-slate-700 dark:text-slate-200">Manage Profiles & Devices</h3>
                      <div className="flex gap-4">
                         <div className="flex-1">
