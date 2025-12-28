@@ -178,6 +178,10 @@ const App: React.FC = () => {
                 return 'Firebase: Error (auth/unauthorized-domain). Add this domain in Firebase Console → Authentication → Settings → Authorized domains.';
             case 'auth/user-not-found':
                 return 'Firebase: Error (auth/user-not-found). That email has no account (try Create Account).';
+            case 'auth/invalid-credential':
+                return 'Firebase: Error (auth/invalid-credential). Usually wrong email/password, or the account was created with a different sign-in method. Try “Forgot Password”, or use the provider you originally used (Google/Apple).';
+            case 'auth/wrong-password':
+                return 'Firebase: Error (auth/wrong-password). Wrong password (try “Forgot Password”).';
             case 'auth/invalid-email':
                 return 'Firebase: Error (auth/invalid-email). Check the email address.';
             case 'auth/too-many-requests':
@@ -2478,7 +2482,8 @@ const App: React.FC = () => {
                                                 setAuthError(null);
                                                 setAuthNotice(null);
                                                 try {
-                                                    await signInWithEmail(authEmail.trim(), authPassword);
+                                                    const email = authEmail.trim().toLowerCase();
+                                                    await signInWithEmail(email, authPassword);
                                                 } catch (e: any) {
                                                     console.warn('Email sign-in failed:', e);
                                                     setAuthError(formatFirebaseAuthError(e));
@@ -2497,7 +2502,8 @@ const App: React.FC = () => {
                                                 setAuthError(null);
                                                 setAuthNotice(null);
                                                 try {
-                                                    await signUpWithEmail(authEmail.trim(), authPassword);
+                                                    const email = authEmail.trim().toLowerCase();
+                                                    await signUpWithEmail(email, authPassword);
                                                 } catch (e: any) {
                                                     console.warn('Email sign-up failed:', e);
                                                     setAuthError(formatFirebaseAuthError(e));
@@ -2516,8 +2522,9 @@ const App: React.FC = () => {
                                                 setAuthError(null);
                                                 setAuthNotice(null);
                                                 try {
-                                                    await resetPassword(authEmail.trim());
-                                                    setAuthNotice('Password reset email sent.');
+                                                    const email = authEmail.trim().toLowerCase();
+                                                    await resetPassword(email);
+                                                    setAuthNotice('Password reset requested. If the account exists, you will receive an email (check Spam/Junk).');
                                                 } catch (e: any) {
                                                     console.warn('Password reset failed:', e);
                                                     setAuthError(formatFirebaseAuthError(e));
