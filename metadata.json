@@ -1,5 +1,5 @@
 {
-  "name": "Alphabet Typing Suite",
+  "name": "AlphaTyper",
   "description": "An advanced tool for practicing and analyzing alphabet speed typing runs. Features multiple modes, detailed analytics, run history, and an AI Speed Coach powered by Gemini to provide personalized feedback.",
   "requestFramePermissions": []
 }

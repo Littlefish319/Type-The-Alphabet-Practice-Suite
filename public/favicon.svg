@@ -1,0 +1,30 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="12" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2563EB"/>
+      <stop offset="0.55" stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="w" x1="16" y1="22" x2="52" y2="40" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#60A5FA"/>
+      <stop offset="0.55" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="52" height="52" rx="16" fill="#0B1220"/>
+  <rect x="7.5" y="7.5" width="49" height="49" rx="15" stroke="rgba(255,255,255,0.18)"/>
+  <rect x="8" y="8" width="48" height="48" rx="14" fill="url(#g)" fill-opacity="0.18"/>
+
+  <!-- Speed lines -->
+  <path d="M12 26H22" stroke="#38BDF8" stroke-width="4" stroke-linecap="round" opacity="0.9"/>
+  <path d="M10 32H22" stroke="#38BDF8" stroke-width="4" stroke-linecap="round" opacity="0.75"/>
+  <path d="M12 38H22" stroke="#38BDF8" stroke-width="4" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- AT mark (A italic-ish + bold T) -->
+  <g transform="translate(0,0) skewX(-12)">
+    <text x="24" y="38" fill="url(#w)" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Inter, Arial" font-size="18" font-style="italic" font-weight="800" letter-spacing="-1">A</text>
+  </g>
+  <text x="36" y="40" fill="white" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Inter, Arial" font-size="22" font-weight="900">T</text>
+
+  <path d="M44 22L50 28" stroke="#38BDF8" stroke-width="4" stroke-linecap="round"/>
+</svg>

@@ -1,8 +1,14 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import type { User } from 'firebase/auth';
 import type { View, GameMode, LocalData, Settings, GameState, Run, TimingLogEntry, FingeringDataItem, ChatMessage, ProfileSettings, FingerPattern, RhythmPattern, MistakeLogEntry, SpecializedPracticeSettings } from './types';
 import { STORAGE_KEY, MAX_ENTRIES, ALPHABET, FINGERING_DATA, TONY_GROUPS_ROW1, TONY_GROUPS_ROW2, INITIAL_GAME_STATE, DEFAULT_LOCAL_DATA, DEFAULT_SETTINGS, getTargetSequence } from './constants';
+import { APP_MAKER_LINE, APP_NAME, APP_TAGLINE } from './branding';
 import { getCoachingTip } from './services/geminiService';
+import { firebaseEnvStatus, isFirebaseConfigured } from './services/firebase';
+import { canUseAppleSignIn, canUseGoogleSignIn, consumeAuthRedirectResult, resetPassword, signInWithAppleWeb, signInWithEmail, signInWithGoogleWeb, signOutUser, signUpWithEmail, watchAuth } from './services/authService';
+import { pullCloudEnvelope, pushCloudEnvelope, subscribeCloudEnvelope, type CloudEnvelope } from './services/cloudSync';
+import { envelopesEqual, ensureRunIds, mergeEnvelopes } from './services/syncMerge';
 
 // --- AUDIO UTILS ---
 let synth: any = null;
@@ -35,6 +41,29 @@ const speak = (text: string, soundEnabled: boolean, voiceEnabled: boolean) => {
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1.2;
     window.speechSynthesis.speak(u);
+};
+
+const MODE_RECORD_ORDER: GameMode[] = ['classic', 'backwards', 'spaces', 'backwards-spaces'];
+
+const modeLabel = (mode: GameMode): string => {
+    switch (mode) {
+        case 'classic':
+            return 'A–Z';
+        case 'backwards':
+            return 'Z–A';
+        case 'spaces':
+            return 'A–Z (spaces)';
+        case 'backwards-spaces':
+            return 'Z–A (spaces)';
+        case 'blank':
+            return 'Blank typing';
+        case 'flash':
+            return 'Flash';
+        case 'guinness':
+            return 'Grid';
+        default:
+            return mode;
+    }
 };
 
 // --- HELPER COMPONENTS ---
@@ -89,6 +118,90 @@ const App: React.FC = () => {
     const [countdown, setCountdown] = useState<string | null>(null);
     const [flashEffect, setFlashEffect] = useState(false);
 
+    // --- UI MODE ---
+    const PROFESSIONAL_MODE_STORAGE_KEY = 'alphabetTypingSuite.professionalMode';
+    const [professionalMode, setProfessionalMode] = useState<boolean>(() => {
+        try {
+            return localStorage.getItem(PROFESSIONAL_MODE_STORAGE_KEY) === '1';
+        } catch {
+            return false;
+        }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(PROFESSIONAL_MODE_STORAGE_KEY, professionalMode ? '1' : '0');
+        } catch {
+            // ignore
+        }
+    }, [professionalMode]);
+
+    // --- SPLASH (COME-IN) ---
+    const [showSplash, setShowSplash] = useState(true);
+    const [splashLeaving, setSplashLeaving] = useState(false);
+
+    useEffect(() => {
+        // Keep the splash visible longer, then fade out.
+        const t1 = window.setTimeout(() => setSplashLeaving(true), 2600);
+        const t2 = window.setTimeout(() => setShowSplash(false), 3000);
+        return () => {
+            window.clearTimeout(t1);
+            window.clearTimeout(t2);
+        };
+    }, []);
+
+    useEffect(() => {
+        // Styling-only global mode; keep behavior unchanged.
+        document.body.classList.toggle('pro-mode', professionalMode);
+        return () => {
+            document.body.classList.remove('pro-mode');
+        };
+    }, [professionalMode]);
+
+    // --- AUTH / CLOUD SYNC ---
+    const firebaseEnabled = isFirebaseConfigured();
+    const firebaseStatus = useMemo(() => firebaseEnvStatus(), [firebaseEnabled]);
+    const [user, setUser] = useState<User | null>(null);
+    const [authEmail, setAuthEmail] = useState('');
+    const [authPassword, setAuthPassword] = useState('');
+    const [authError, setAuthError] = useState<string | null>(null);
+    const [authNotice, setAuthNotice] = useState<string | null>(null);
+    const [authBusy, setAuthBusy] = useState(false);
+
+    const formatFirebaseAuthError = useCallback((e: any): string => {
+        const code = String(e?.code || '');
+        const msg = String(e?.message || '');
+        switch (code) {
+            case 'auth/operation-not-allowed':
+                return 'Firebase: Error (auth/operation-not-allowed). Enable this provider in Firebase Console → Authentication → Sign-in method.';
+            case 'auth/unauthorized-domain':
+                return 'Firebase: Error (auth/unauthorized-domain). Add this domain in Firebase Console → Authentication → Settings → Authorized domains.';
+            case 'auth/user-not-found':
+                return 'Firebase: Error (auth/user-not-found). That email has no account (try Create Account).';
+            case 'auth/invalid-email':
+                return 'Firebase: Error (auth/invalid-email). Check the email address.';
+            case 'auth/too-many-requests':
+                return 'Firebase: Error (auth/too-many-requests). Try again later.';
+            case 'auth/popup-blocked':
+                return 'Firebase: Error (auth/popup-blocked). Allow popups, then try again.';
+            default:
+                return msg || (code ? `Firebase: Error (${code}).` : String(e));
+        }
+    }, []);
+
+    const [syncStatus, setSyncStatus] = useState<'off' | 'idle' | 'syncing' | 'error'>('off');
+    const [syncError, setSyncError] = useState<string | null>(null);
+    const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+
+    const localUpdatedAtRef = useRef<number>(0);
+    const applyingRemoteRef = useRef<boolean>(false);
+    const pushTimerRef = useRef<number | null>(null);
+    const localDataRef = useRef<LocalData>(localData);
+    const settingsRef = useRef<Settings>(settings);
+
+    useEffect(() => { localDataRef.current = localData; }, [localData]);
+    useEffect(() => { settingsRef.current = settings; }, [settings]);
+
     const isAiAvailable = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
 
     const alphaLetters = useMemo(() => ALPHABET.split(''), []);
@@ -136,6 +249,9 @@ const App: React.FC = () => {
             const storedData = localStorage.getItem(STORAGE_KEY);
             if (storedData) {
                 const parsed = JSON.parse(storedData);
+                if (parsed?.meta && typeof parsed.meta.updatedAt === 'number') {
+                    localUpdatedAtRef.current = parsed.meta.updatedAt;
+                }
                 if (parsed.localData && !parsed.localData.profileSettings) {
                     const newProfileSettings: { [key: string]: ProfileSettings } = {};
                     parsed.localData.profiles.forEach((p: string) => {
@@ -171,12 +287,188 @@ const App: React.FC = () => {
 
     useEffect(() => {
         try {
-            const dataToStore = { localData, settings };
+            if (!applyingRemoteRef.current) {
+                localUpdatedAtRef.current = Date.now();
+            }
+
+            const dataToStore = {
+                localData,
+                settings,
+                meta: { updatedAt: localUpdatedAtRef.current }
+            };
             localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToStore));
         } catch (e) {
             console.error("Failed to save data to localStorage", e);
         }
     }, [localData, settings]);
+
+    useEffect(() => {
+        if (!firebaseEnabled) {
+            setUser(null);
+            setSyncStatus('off');
+            return;
+        }
+        const unsub = watchAuth((u) => setUser(u));
+        return () => unsub();
+    }, [firebaseEnabled]);
+
+    useEffect(() => {
+        if (!firebaseEnabled) return;
+        // Needed for OAuth redirect flows (Google/Apple) to complete on return.
+        void consumeAuthRedirectResult().catch((e) => {
+            // No redirect result (common) or provider not configured.
+            console.warn('Auth redirect result not available:', e);
+        });
+    }, [firebaseEnabled]);
+
+    const applyCloudEnvelope = useCallback((env: CloudEnvelope) => {
+        applyingRemoteRef.current = true;
+        localUpdatedAtRef.current = env.updatedAt;
+        setLocalData({
+            ...env.localData,
+            history: ensureRunIds(env.localData.history || []),
+        });
+        setSettings(env.settings);
+        window.setTimeout(() => {
+            applyingRemoteRef.current = false;
+        }, 0);
+    }, []);
+
+    const pushNow = useCallback(async (reason: string) => {
+        if (!firebaseEnabled || !user) return;
+        if (applyingRemoteRef.current) return;
+
+        setSyncStatus('syncing');
+        setSyncError(null);
+
+        const envelope: CloudEnvelope = {
+            schemaVersion: 1,
+            updatedAt: localUpdatedAtRef.current || Date.now(),
+            localData: {
+                ...localDataRef.current,
+                history: ensureRunIds(localDataRef.current.history || []),
+            },
+            settings: settingsRef.current,
+        };
+
+        try {
+            await pushCloudEnvelope(user.uid, envelope);
+            setSyncStatus('idle');
+            setLastSyncAt(Date.now());
+        } catch (e: any) {
+            setSyncStatus('error');
+            setSyncError(e?.message || String(e));
+            console.error(`Cloud push failed (${reason})`, e);
+        }
+    }, [firebaseEnabled, user]);
+
+    useEffect(() => {
+        if (!firebaseEnabled || !user) return;
+
+        setSyncStatus('syncing');
+        setSyncError(null);
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const cloud = await pullCloudEnvelope(user.uid);
+                if (cancelled) return;
+
+                if (!cloud) {
+                    // First login on this account: seed cloud with local.
+                    await pushNow('initial-seed');
+                    return;
+                }
+
+                const localEnv: CloudEnvelope = {
+                    schemaVersion: 1,
+                    updatedAt: localUpdatedAtRef.current || 0,
+                    localData: {
+                        ...localDataRef.current,
+                        history: ensureRunIds(localDataRef.current.history || []),
+                    },
+                    settings: settingsRef.current,
+                };
+
+                const merged = mergeEnvelopes(localEnv, cloud);
+                const mergedEnv: CloudEnvelope = {
+                    schemaVersion: 1,
+                    updatedAt: merged.updatedAt,
+                    localData: merged.localData,
+                    settings: merged.settings,
+                };
+
+                if (!envelopesEqual(mergedEnv, localEnv) || mergedEnv.updatedAt !== localEnv.updatedAt) {
+                    applyCloudEnvelope(mergedEnv);
+                }
+
+                if (!envelopesEqual(mergedEnv, cloud) || mergedEnv.updatedAt !== cloud.updatedAt) {
+                    await pushCloudEnvelope(user.uid, mergedEnv);
+                }
+
+                setSyncStatus('idle');
+                setLastSyncAt(Date.now());
+            } catch (e: any) {
+                if (cancelled) return;
+                setSyncStatus('error');
+                setSyncError(e?.message || String(e));
+                console.error('Initial cloud sync failed', e);
+            }
+        })();
+
+        const unsub = subscribeCloudEnvelope(user.uid, (env) => {
+            if (!env) return;
+
+            const localEnv: CloudEnvelope = {
+                schemaVersion: 1,
+                updatedAt: localUpdatedAtRef.current || 0,
+                localData: {
+                    ...localDataRef.current,
+                    history: ensureRunIds(localDataRef.current.history || []),
+                },
+                settings: settingsRef.current,
+            };
+
+            const merged = mergeEnvelopes(localEnv, env);
+            const mergedEnv: CloudEnvelope = {
+                schemaVersion: 1,
+                updatedAt: merged.updatedAt,
+                localData: merged.localData,
+                settings: merged.settings,
+            };
+
+            if (!envelopesEqual(mergedEnv, localEnv) || mergedEnv.updatedAt !== localEnv.updatedAt) {
+                applyCloudEnvelope(mergedEnv);
+                setLastSyncAt(Date.now());
+                setSyncStatus('idle');
+            }
+
+            if (!envelopesEqual(mergedEnv, env) || mergedEnv.updatedAt !== env.updatedAt) {
+                void pushCloudEnvelope(user.uid, mergedEnv).catch((e) => {
+                    console.error('Cloud reconcile push failed', e);
+                });
+            }
+        });
+
+        return () => {
+            cancelled = true;
+            unsub();
+        };
+    }, [applyCloudEnvelope, firebaseEnabled, pushNow, user]);
+
+    useEffect(() => {
+        if (!firebaseEnabled || !user) return;
+        if (applyingRemoteRef.current) return;
+
+        if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = window.setTimeout(() => {
+            void pushNow('debounced');
+        }, 900);
+
+        return () => {
+            if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
+        };
+    }, [firebaseEnabled, localData, pushNow, settings, user]);
     
     // --- UI COMPUTATIONS ---
     const currentProfileSettings = useMemo(() => {
@@ -335,6 +627,7 @@ const App: React.FC = () => {
         setCurrentTime(finalTime);
 
         const newRun: Run = {
+            id: (globalThis.crypto as any)?.randomUUID?.() || `r_${Date.now()}_${Math.random().toString(16).slice(2)}`,
             time: finalTime,
             mistakes: gameState.mistakes,
             mode: settings.mode,
@@ -454,6 +747,16 @@ const App: React.FC = () => {
 
     const handleKeydown = useCallback((e: KeyboardEvent) => {
         if (managementModalOpen || resultsModalOpen) return;
+        if (view !== 'practice') return;
+
+        const target = e.target as HTMLElement | null;
+        const tag = (target?.tagName || '').toLowerCase();
+        const isEditable =
+            tag === 'input' ||
+            tag === 'textarea' ||
+            tag === 'select' ||
+            Boolean((target as any)?.isContentEditable);
+        if (isEditable) return;
 
         const key = e.key.toLowerCase();
 
@@ -473,10 +776,19 @@ const App: React.FC = () => {
         e.preventDefault();
         processTypedKey(key);
     }, [
-        gameState, settings, localData, targetSequence,
-        countdown, managementModalOpen, resultsModalOpen,
-        beginRun, endGame, resetGame, startGameSequence,
-        processTypedKey
+        beginRun,
+        countdown,
+        endGame,
+        gameState,
+        localData,
+        managementModalOpen,
+        processTypedKey,
+        resetGame,
+        resultsModalOpen,
+        settings,
+        startGameSequence,
+        targetSequence,
+        view
     ]);
     
     const handleBlankInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -561,6 +873,32 @@ const App: React.FC = () => {
             )
             .reduce((min, r) => Math.min(min, r.time), Infinity);
         return bestTime === Infinity ? '--' : bestTime.toFixed(2);
+    }, [localData, settings.mode]);
+
+    const deviceRecordsByMode = useMemo(() => {
+        const orderedModes: GameMode[] = MODE_RECORD_ORDER.includes(settings.mode)
+            ? MODE_RECORD_ORDER
+            : [settings.mode, ...MODE_RECORD_ORDER];
+
+        const bestByMode = new Map<GameMode, number>(orderedModes.map(m => [m, Infinity]));
+
+        for (const run of localData.history) {
+            if (
+                run.profile !== localData.currentProfile ||
+                run.device !== localData.currentDevice ||
+                run.specialized?.enabled
+            ) {
+                continue;
+            }
+
+            if (!bestByMode.has(run.mode)) continue;
+            bestByMode.set(run.mode, Math.min(bestByMode.get(run.mode) ?? Infinity, run.time));
+        }
+
+        return orderedModes.map(mode => {
+            const best = bestByMode.get(mode) ?? Infinity;
+            return { mode, timeText: best === Infinity ? '--' : best.toFixed(2) };
+        });
     }, [localData, settings.mode]);
 
     const specializedRecord = useMemo(() => {
@@ -695,7 +1033,7 @@ const App: React.FC = () => {
         const recentRuns = localData.history
             .filter(r => r.profile === localData.currentProfile && r.device === localData.currentDevice)
             .slice(0, 5)
-            .map(r => `Time: ${r.time.toFixed(2)}s, Mode: ${r.mode}`)
+            .map(r => `Time: ${r.time.toFixed(2)}s, Mode: ${modeLabel(r.mode)}`)
             .join('; ');
         
         const fullPrompt = `You are an expert typing coach named 'Coach Gemini'. Help the user improve.
@@ -1058,15 +1396,92 @@ const App: React.FC = () => {
         <>
         {flashEffect && <div id="flash-overlay" className="fixed inset-0 z-[100] animate-flash"></div>}
 
-        <div className="w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 sm:p-6 md:p-8 mt-4 border border-slate-200 dark:border-slate-800">
+        {showSplash && (
+            <div
+                className={
+                    'fixed inset-0 z-[1000] bg-white text-slate-950 flex items-center justify-center px-6 ' +
+                    (splashLeaving ? 'opacity-0 transition-opacity duration-300' : 'opacity-100')
+                }
+            >
+                <div className="w-full max-w-md text-center">
+                    <div className="mx-auto h-14 w-14">
+                        <img src="/logo.svg" alt={`${APP_NAME} logo`} className="h-14 w-14" draggable={false} />
+                    </div>
+                    <div className="mt-5 text-5xl font-black tracking-tight text-slate-950">{APP_NAME}</div>
+                    <div className="mt-2 text-sm font-bold uppercase tracking-[0.24em] text-slate-500">{APP_TAGLINE}</div>
+                    <div className="mt-10 text-xs font-semibold text-slate-400">
+                        {APP_MAKER_LINE}
+                    </div>
+                    <div className="mt-3 h-1 w-20 mx-auto rounded-full bg-gradient-to-r from-blue-600 via-cyan-500 to-indigo-500" />
+                </div>
+            </div>
+        )}
+
+        <div
+            className={
+                professionalMode
+                    ? 'relative min-h-screen w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 px-3 sm:px-6 overflow-hidden'
+                    : 'min-h-screen w-full flex justify-center bg-slate-50 dark:bg-slate-950 px-3 sm:px-6'
+            }
+        >
+        {professionalMode && (
+            <div className="pointer-events-none absolute inset-0">
+                <div className="absolute -top-40 -left-40 h-[520px] w-[520px] rounded-full bg-gradient-to-br from-blue-400/25 via-cyan-300/15 to-transparent blur-3xl" />
+                <div className="absolute -bottom-56 -right-56 h-[720px] w-[720px] rounded-full bg-gradient-to-tr from-indigo-400/20 via-blue-400/10 to-transparent blur-3xl" />
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(148,163,184,0.18)_1px,transparent_0)] [background-size:24px_24px] opacity-30 dark:opacity-15" />
+            </div>
+        )}
+        <div
+            className={
+                professionalMode
+                    ? 'relative w-full max-w-6xl bg-white/80 dark:bg-slate-900/70 shadow-2xl rounded-3xl p-4 sm:p-6 md:p-8 mt-4 border border-slate-200/70 dark:border-slate-800/80 ring-1 ring-slate-200/60 dark:ring-slate-700/60 backdrop-blur-xl'
+                    : 'w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 sm:p-6 md:p-8 mt-4 border border-slate-200 dark:border-slate-800'
+            }
+        >
             {/* Header */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b border-slate-100 dark:border-slate-700 pb-4">
                 <div>
-                    <h1 className="text-2xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500">
-                        Alphabet Typing Suite
-                    </h1>
+                    {professionalMode && (
+                        <div className="relative">
+                            <div className="pointer-events-none absolute -inset-x-6 -inset-y-3 rounded-3xl bg-gradient-to-r from-blue-500/15 via-cyan-400/10 to-indigo-500/15 blur-2xl" />
+                        </div>
+                    )}
+                    <div className="flex items-center gap-3">
+                        <img
+                            src="/logo.svg"
+                            alt={`${APP_NAME} logo`}
+                            className={professionalMode ? 'h-9 w-9 drop-shadow-sm' : 'h-8 w-8'}
+                            draggable={false}
+                        />
+                        <div className="leading-tight">
+                            <h1 className="text-2xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-cyan-500">
+                                {APP_NAME}
+                            </h1>
+                            <div className="text-[11px] font-bold uppercase tracking-widest text-slate-400">{APP_TAGLINE}</div>
+                        </div>
+                    </div>
                 </div>
                 <div className="flex flex-wrap gap-3 items-center">
+                    <div className="flex items-center gap-3 bg-slate-100/80 dark:bg-slate-800/60 text-slate-700 dark:text-slate-100 text-xs font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
+                        <div className="uppercase tracking-wide">Professional Mode</div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={professionalMode}
+                            onClick={() => setProfessionalMode(v => !v)}
+                            className={
+                                'relative inline-flex h-6 w-11 items-center rounded-full transition ' +
+                                (professionalMode ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700')
+                            }
+                        >
+                            <span
+                                className={
+                                    'inline-block h-5 w-5 transform rounded-full bg-white transition ' +
+                                    (professionalMode ? 'translate-x-5' : 'translate-x-1')
+                                }
+                            />
+                        </button>
+                    </div>
                     <div className="relative">
                         <select value={localData.currentProfile} onChange={e => setLocalData({...localData, currentProfile: e.target.value})} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-white text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 outline-none appearance-none pr-8 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition w-32">
                             {localData.profiles.map(p => <option key={p} value={p}>{p}</option>)}
@@ -1086,12 +1501,85 @@ const App: React.FC = () => {
             </div>
 
             {/* Main Navigation Tabs */}
-            <div className="flex overflow-x-auto gap-6 mb-6 text-sm font-bold uppercase tracking-wide">
-                <button onClick={() => setView('practice')} className={view === 'practice' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Practice & Record</button>
-                <button onClick={() => setView('fingerPatterns')} className={view === 'fingerPatterns' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Finger Pattern Practice</button>
-                <button onClick={() => setView('analytics')} className={view === 'analytics' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Analytics & Coach</button>
-                <button onClick={() => setView('history')} className={view === 'history' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>Run History</button>
-                <button onClick={() => setView('about')} className={view === 'about' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition'}>About</button>
+            <div
+                className={
+                    professionalMode
+                        ? 'flex overflow-x-auto gap-2 mb-6 text-[11px] font-black uppercase tracking-wide bg-white/70 dark:bg-slate-900/50 border border-slate-200/70 dark:border-slate-700/60 rounded-2xl p-1 backdrop-blur'
+                        : 'flex overflow-x-auto gap-6 mb-6 text-sm font-bold uppercase tracking-wide'
+                }
+            >
+                <button
+                    onClick={() => setView('practice')}
+                    className={
+                        professionalMode
+                            ? (view === 'practice'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'practice' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Practice & Record
+                </button>
+                <button
+                    onClick={() => setView('fingerPatterns')}
+                    className={
+                        professionalMode
+                            ? (view === 'fingerPatterns'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'fingerPatterns' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Finger Pattern Practice
+                </button>
+                <button
+                    onClick={() => setView('analytics')}
+                    className={
+                        professionalMode
+                            ? (view === 'analytics'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'analytics' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Analytics & Coach
+                </button>
+                <button
+                    onClick={() => setView('history')}
+                    className={
+                        professionalMode
+                            ? (view === 'history'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'history' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Run History
+                </button>
+                <button
+                    onClick={() => setView('about')}
+                    className={
+                        professionalMode
+                            ? (view === 'about'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'about' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    About
+                </button>
+                <button
+                    onClick={() => setView('account')}
+                    className={
+                        professionalMode
+                            ? (view === 'account'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'account' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Account{user ? ' •' : ''}
+                </button>
             </div>
             
              {/* Views */}
@@ -1227,11 +1715,24 @@ const App: React.FC = () => {
                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
                         <div className="text-[10px] uppercase font-bold text-slate-400">
-                            {specializedPractice.enabled ? `Specialized Record (${specializedPractice.start.toUpperCase()}–${specializedPractice.end.toUpperCase()})` : 'Mode Record'}
+                            {specializedPractice.enabled
+                                ? `Specialized Record (${specializedPractice.start.toUpperCase()}–${specializedPractice.end.toUpperCase()})`
+                                : `Device Record (${modeLabel(settings.mode)})`}
                         </div>
                         <div className="text-2xl font-black text-blue-500 font-mono">{specializedPractice.enabled ? (specializedRecord || '--') : deviceRecord}</div>
-                        {specializedPractice.enabled && (
-                            <div className="mt-1 text-[10px] uppercase tracking-widest font-bold text-slate-400">Full record: {deviceRecord}</div>
+                        {specializedPractice.enabled ? (
+                            <div className="mt-1 text-[10px] uppercase tracking-widest font-bold text-slate-400">Full {modeLabel(settings.mode)} record: {deviceRecord}</div>
+                        ) : (
+                            <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                {deviceRecordsByMode
+                                    .filter(r => r.mode !== settings.mode)
+                                    .map(r => (
+                                        <div key={r.mode} className="flex items-baseline justify-between gap-2">
+                                            <span className="font-bold text-slate-500 dark:text-slate-400">{modeLabel(r.mode)}</span>
+                                            <span className="font-mono font-black text-slate-700 dark:text-slate-200">{r.timeText}</span>
+                                        </div>
+                                    ))}
+                            </div>
                         )}
                     </div>
                     <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
@@ -1779,7 +2280,7 @@ const App: React.FC = () => {
                               sortedHistory.filter(r => r.profile === localData.currentProfile).map(r => (
                                  <tr key={r.timestamp} className={`hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors ${(!r.specialized?.enabled && r.time === personalBestTime) ? 'bg-amber-50 dark:bg-amber-900/20' : ''}`}>
                                     <td className="px-3 sm:px-4 py-2 text-[10px] sm:text-xs uppercase font-bold text-blue-500 whitespace-nowrap">
-                                        {r.mode}
+                                        {modeLabel(r.mode)}
                                         {r.specialized?.enabled ? ` [${r.specialized.start.toUpperCase()}-${r.specialized.end.toUpperCase()}]` : ''}
                                         {r.blind ? ' (Blind)' : ''}
                                     </td>
@@ -1847,6 +2348,243 @@ const App: React.FC = () => {
                             <div className="text-[10px] uppercase font-bold text-slate-400">Keys/Sec</div>
                             <div className="text-2xl font-black text-slate-800 dark:text-white font-mono">21.48 KPS</div>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className={view !== 'account' ? 'hidden' : ''}>
+                {/* ACCOUNT VIEW */}
+                <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 md:p-8">
+                    <div className="max-w-2xl">
+                        <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Account</div>
+                        <h2 className="text-2xl md:text-3xl font-black tracking-tight text-slate-900 dark:text-white mt-1">Login & Cloud Sync</h2>
+
+                        {!firebaseEnabled ? (
+                            <div className="mt-5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5">
+                                <div className="text-sm font-bold text-slate-800 dark:text-slate-200">Not configured</div>
+                                <div className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                                    Firebase environment variables are missing. Cloud login/sync is disabled until configured.
+                                </div>
+                                <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                                    If you just edited <span className="font-mono">.env.local</span>, stop the dev server and restart <span className="font-mono">npm run dev</span>.
+                                </div>
+                                <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                                    <div className={`rounded-lg border px-3 py-2 ${firebaseStatus.apiKey ? 'border-green-300 bg-green-50 dark:border-green-900/50 dark:bg-green-900/20' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800'}`}>
+                                        <div className="font-bold text-slate-600 dark:text-slate-300">VITE_FIREBASE_API_KEY</div>
+                                        <div className="text-slate-500 dark:text-slate-400">{firebaseStatus.apiKey ? 'Detected' : 'Missing'}</div>
+                                    </div>
+                                    <div className={`rounded-lg border px-3 py-2 ${firebaseStatus.authDomain ? 'border-green-300 bg-green-50 dark:border-green-900/50 dark:bg-green-900/20' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800'}`}>
+                                        <div className="font-bold text-slate-600 dark:text-slate-300">VITE_FIREBASE_AUTH_DOMAIN</div>
+                                        <div className="text-slate-500 dark:text-slate-400">{firebaseStatus.authDomain ? 'Detected' : 'Missing'}</div>
+                                    </div>
+                                    <div className={`rounded-lg border px-3 py-2 ${firebaseStatus.projectId ? 'border-green-300 bg-green-50 dark:border-green-900/50 dark:bg-green-900/20' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800'}`}>
+                                        <div className="font-bold text-slate-600 dark:text-slate-300">VITE_FIREBASE_PROJECT_ID</div>
+                                        <div className="text-slate-500 dark:text-slate-400">{firebaseStatus.projectId ? 'Detected' : 'Missing'}</div>
+                                    </div>
+                                    <div className={`rounded-lg border px-3 py-2 ${firebaseStatus.appId ? 'border-green-300 bg-green-50 dark:border-green-900/50 dark:bg-green-900/20' : 'border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800'}`}>
+                                        <div className="font-bold text-slate-600 dark:text-slate-300">VITE_FIREBASE_APP_ID</div>
+                                        <div className="text-slate-500 dark:text-slate-400">{firebaseStatus.appId ? 'Detected' : 'Missing'}</div>
+                                    </div>
+                                </div>
+                                <div className="mt-3 text-[11px] text-slate-400">
+                                    Mode: <span className="font-mono">{String(firebaseStatus.mode || '')}</span> · Dev: <span className="font-mono">{firebaseStatus.dev ? 'true' : 'false'}</span>
+                                </div>
+                            </div>
+                        ) : user ? (
+                            <div className="mt-5 space-y-4">
+                                <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5">
+                                    <div className="text-sm font-bold text-slate-800 dark:text-slate-200">Signed in</div>
+                                    <div className="mt-1 text-sm text-slate-600 dark:text-slate-300 break-all">{user.email || user.uid}</div>
+
+                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                                            <div className="text-[10px] uppercase font-bold text-slate-400">Sync</div>
+                                            <div className="text-sm font-black text-slate-800 dark:text-white">
+                                                {syncStatus === 'off' ? 'Off' : syncStatus === 'syncing' ? 'Syncing…' : syncStatus === 'error' ? 'Error' : 'On'}
+                                            </div>
+                                        </div>
+                                        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                                            <div className="text-[10px] uppercase font-bold text-slate-400">Last Sync</div>
+                                            <div className="text-sm font-black text-slate-800 dark:text-white">
+                                                {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : '—'}
+                                            </div>
+                                        </div>
+                                        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                                            <div className="text-[10px] uppercase font-bold text-slate-400">Providers</div>
+                                            <div className="text-sm font-black text-slate-800 dark:text-white">Email</div>
+                                        </div>
+                                    </div>
+
+                                    {syncError && (
+                                        <div className="mt-3 text-sm text-red-600 dark:text-red-400">{syncError}</div>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        onClick={() => void pushNow('manual')}
+                                        className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:bg-blue-400"
+                                        disabled={syncStatus === 'syncing'}
+                                    >
+                                        Sync Now
+                                    </button>
+                                    <button
+                                        onClick={() => void signOutUser()}
+                                        className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
+                                    >
+                                        Sign Out
+                                    </button>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="mt-5 space-y-4">
+                                <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5">
+                                    <div className="text-sm font-bold text-slate-800 dark:text-slate-200">Sign in / Sign up</div>
+                                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Email</label>
+                                            <input
+                                                value={authEmail}
+                                                onChange={(e) => setAuthEmail(e.target.value)}
+                                                type="email"
+                                                autoComplete="email"
+                                                className="w-full mt-1 px-3 py-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Password</label>
+                                            <input
+                                                value={authPassword}
+                                                onChange={(e) => setAuthPassword(e.target.value)}
+                                                type="password"
+                                                autoComplete="current-password"
+                                                className="w-full mt-1 px-3 py-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {authError && (
+                                        <div className="mt-3 text-sm text-red-600 dark:text-red-400">{authError}</div>
+                                    )}
+
+                                    {authNotice && (
+                                        <div className="mt-3 text-sm text-green-600 dark:text-green-400">{authNotice}</div>
+                                    )}
+
+                                    <div className="mt-4 flex flex-wrap gap-2">
+                                        <button
+                                            onClick={async () => {
+                                                setAuthBusy(true);
+                                                setAuthError(null);
+                                                setAuthNotice(null);
+                                                try {
+                                                    await signInWithEmail(authEmail.trim(), authPassword);
+                                                } catch (e: any) {
+                                                    console.warn('Email sign-in failed:', e);
+                                                    setAuthError(formatFirebaseAuthError(e));
+                                                } finally {
+                                                    setAuthBusy(false);
+                                                }
+                                            }}
+                                            disabled={authBusy || !authEmail.trim() || !authPassword}
+                                            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:bg-blue-400"
+                                        >
+                                            Sign In
+                                        </button>
+                                        <button
+                                            onClick={async () => {
+                                                setAuthBusy(true);
+                                                setAuthError(null);
+                                                setAuthNotice(null);
+                                                try {
+                                                    await signUpWithEmail(authEmail.trim(), authPassword);
+                                                } catch (e: any) {
+                                                    console.warn('Email sign-up failed:', e);
+                                                    setAuthError(formatFirebaseAuthError(e));
+                                                } finally {
+                                                    setAuthBusy(false);
+                                                }
+                                            }}
+                                            disabled={authBusy || !authEmail.trim() || !authPassword}
+                                            className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-700 disabled:bg-green-400"
+                                        >
+                                            Create Account
+                                        </button>
+                                        <button
+                                            onClick={async () => {
+                                                setAuthBusy(true);
+                                                setAuthError(null);
+                                                setAuthNotice(null);
+                                                try {
+                                                    await resetPassword(authEmail.trim());
+                                                    setAuthNotice('Password reset email sent.');
+                                                } catch (e: any) {
+                                                    console.warn('Password reset failed:', e);
+                                                    setAuthError(formatFirebaseAuthError(e));
+                                                } finally {
+                                                    setAuthBusy(false);
+                                                }
+                                            }}
+                                            disabled={authBusy || !authEmail.trim()}
+                                            className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-50"
+                                        >
+                                            Forgot Password
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {(canUseGoogleSignIn() || canUseAppleSignIn()) && (
+                                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5">
+                                        <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Or</div>
+                                        {canUseGoogleSignIn() && (
+                                            <button
+                                                onClick={async () => {
+                                                    setAuthBusy(true);
+                                                    setAuthError(null);
+                                                    try {
+                                                        await signInWithGoogleWeb();
+                                                    } catch (e: any) {
+                                                        // Popup blocked may trigger redirect. Either way, show a minimal message.
+                                                        console.warn('Google sign-in failed:', e);
+                                                        setAuthError(formatFirebaseAuthError(e));
+                                                    } finally {
+                                                        setAuthBusy(false);
+                                                    }
+                                                }}
+                                                disabled={authBusy}
+                                                className="mt-3 bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-800 disabled:bg-slate-600"
+                                            >
+                                                Continue with Google (Web)
+                                            </button>
+                                        )}
+
+                                        {canUseAppleSignIn() && (
+                                            <button
+                                                onClick={async () => {
+                                                    setAuthBusy(true);
+                                                    setAuthError(null);
+                                                    try {
+                                                        await signInWithAppleWeb();
+                                                    } catch (e: any) {
+                                                        console.warn('Apple sign-in failed:', e);
+                                                        setAuthError(formatFirebaseAuthError(e));
+                                                    } finally {
+                                                        setAuthBusy(false);
+                                                    }
+                                                }}
+                                                disabled={authBusy}
+                                                className="mt-2 bg-black text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-900 disabled:bg-slate-600"
+                                            >
+                                                Continue with Apple (Web)
+                                            </button>
+                                        )}
+                                        <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                            iOS uses email/password for now (Google/Apple sign-in needs extra native setup).
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -1953,6 +2691,8 @@ const App: React.FC = () => {
                 }
             }}
         />
+
+        </div>
         </>
     );
 };

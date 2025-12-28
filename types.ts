@@ -1,6 +1,6 @@
 
 export type GameMode = 'classic' | 'blank' | 'flash' | 'guinness' | 'backwards' | 'spaces' | 'backwards-spaces';
-export type View = 'practice' | 'fingerPatterns' | 'analytics' | 'history' | 'about';
+export type View = 'practice' | 'fingerPatterns' | 'analytics' | 'history' | 'about' | 'account';
 
 export type FingerCode = string;
 
@@ -45,6 +45,7 @@ export interface MistakeLogEntry {
 }
 
 export interface Run {
+    id?: string;
     time: number;
     mistakes: number;
     mode: GameMode;

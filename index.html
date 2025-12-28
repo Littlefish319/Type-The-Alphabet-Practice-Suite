@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Alphabet Typing Suite</title>
+    <title>AlphaTyper: The Alphabet Typing Suite</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <!-- Tone.js for sounds (Keeping CDN as App.tsx relies on global window.Tone) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <!-- Tailwind CSS for styling -->
@@ -37,6 +38,62 @@
     </script>
     <style>
         body { transition: background-color 0.3s, color 0.3s; }
+
+        /* --- PROFESSIONAL MODE (VIP) --- */
+        body.pro-mode {
+            padding: 0 !important;
+            background:
+                radial-gradient(900px 600px at 15% 10%, rgba(59, 130, 246, 0.20), transparent 60%),
+                radial-gradient(900px 600px at 85% 90%, rgba(34, 211, 238, 0.12), transparent 60%),
+                radial-gradient(700px 500px at 80% 10%, rgba(99, 102, 241, 0.10), transparent 55%),
+                linear-gradient(180deg, #f8fafc 0%, #ffffff 45%, #f8fafc 100%) !important;
+        }
+        body.pro-mode.dark,
+        .dark body.pro-mode {
+            background:
+                radial-gradient(900px 600px at 15% 10%, rgba(59, 130, 246, 0.18), transparent 60%),
+                radial-gradient(900px 600px at 85% 90%, rgba(34, 211, 238, 0.10), transparent 60%),
+                radial-gradient(700px 500px at 80% 10%, rgba(99, 102, 241, 0.10), transparent 55%),
+                linear-gradient(180deg, #020617 0%, #020617 55%, #0b1220 100%) !important;
+        }
+
+        body.pro-mode button {
+            border-radius: 14px;
+            transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+        }
+        body.pro-mode button:hover { filter: brightness(1.02); }
+        body.pro-mode button:active { transform: translateY(1px); }
+        body.pro-mode button:focus-visible {
+            outline: 2px solid rgba(59, 130, 246, 0.65);
+            outline-offset: 2px;
+        }
+
+        body.pro-mode input,
+        body.pro-mode select,
+        body.pro-mode textarea {
+            border-radius: 14px !important;
+        }
+        body.pro-mode input:focus,
+        body.pro-mode select:focus,
+        body.pro-mode textarea:focus {
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.20);
+        }
+
+        body.pro-mode .letter-box {
+            border-radius: 14px;
+            box-shadow: 0 8px 20px rgba(2, 6, 23, 0.10);
+        }
+        body.pro-mode.dark .letter-box,
+        .dark body.pro-mode .letter-box {
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+        }
+
+        body.pro-mode .active-tab {
+            border-bottom-color: transparent;
+        }
+        body.pro-mode .inactive-tab {
+            border-bottom-color: transparent;
+        }
         .letter-box {
             transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
             width: 48px;
