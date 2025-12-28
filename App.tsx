@@ -1511,8 +1511,8 @@ const App: React.FC = () => {
         <div
             className={
                 professionalMode
-                    ? 'relative h-[100dvh] w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:pl-[calc(env(safe-area-inset-left)+1.5rem)] sm:pr-[calc(env(safe-area-inset-right)+1.5rem)]'
-                    : 'h-[100dvh] w-full flex justify-center bg-slate-50 dark:bg-slate-950 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:pl-[calc(env(safe-area-inset-left)+1.5rem)] sm:pr-[calc(env(safe-area-inset-right)+1.5rem)]'
+                    ? 'safe-shell relative h-[100dvh] w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 overflow-x-hidden overflow-y-auto'
+                    : 'safe-shell h-[100dvh] w-full flex justify-center bg-slate-50 dark:bg-slate-950 overflow-x-hidden overflow-y-auto'
             }
         >
         {professionalMode && (
@@ -1595,8 +1595,8 @@ const App: React.FC = () => {
             <div
                 className={
                     professionalMode
-                        ? 'flex overflow-x-auto gap-2 mb-6 text-[11px] font-black uppercase tracking-wide bg-white/70 dark:bg-slate-900/50 border border-slate-200/70 dark:border-slate-700/60 rounded-2xl p-1 backdrop-blur'
-                        : 'flex overflow-x-auto gap-6 mb-6 text-sm font-bold uppercase tracking-wide'
+                        ? 'flex flex-nowrap overflow-x-auto gap-2 mb-6 text-[11px] font-black uppercase tracking-wide bg-white/70 dark:bg-slate-900/50 border border-slate-200/70 dark:border-slate-700/60 rounded-2xl p-1 backdrop-blur whitespace-nowrap'
+                        : 'flex flex-nowrap overflow-x-auto gap-6 mb-6 text-sm font-bold uppercase tracking-wide whitespace-nowrap px-1'
                 }
             >
                 <button
@@ -1676,7 +1676,7 @@ const App: React.FC = () => {
              {/* Views */}
             <div className={view !== 'practice' ? 'hidden' : ''}>
                 {/* PRACTICE VIEW */}
-                <div className="flex flex-wrap justify-center gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl inline-flex w-full overflow-x-auto">
+                <div className="flex flex-nowrap justify-start gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl w-full overflow-x-auto whitespace-nowrap">
                     {(['classic', 'backwards', 'spaces', 'backwards-spaces', 'blank', 'flash', 'guinness'] as GameMode[]).map(m => (
                         <button key={m} onClick={() => resetGame(m)} className={`flex-none px-4 py-2 rounded-lg text-[11px] font-bold transition ${settings.mode === m ? 'bg-white dark:bg-slate-700 shadow text-blue-600 dark:text-blue-300 scale-105' : 'text-slate-500 hover:bg-white/50'}`}>
                              {m.includes('backwards') ? (m.includes('spaces') ? 'Z Y X' : 'Z-A') : m.includes('spaces') ? 'A B C' : <span className="capitalize">{m} {m==='blank' ? 'Typing' : m==='flash' ? 'Flash' : 'Grid' }</span>}
@@ -2718,7 +2718,7 @@ const App: React.FC = () => {
 
         {/* RESULTS MODAL */}
         {resultsModalOpen && 
-            <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-md p-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-[calc(env(safe-area-inset-bottom)+1rem)] pl-[calc(env(safe-area-inset-left)+1rem)] pr-[calc(env(safe-area-inset-right)+1rem)] transition-opacity">
+            <div className="modal-safe fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-md transition-opacity">
                 <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-sm w-full border border-slate-200 dark:border-slate-700 transform transition-all scale-100 mx-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] overflow-y-auto">
                      <div className="text-center">
                         <div className="text-xs text-slate-400 font-bold uppercase tracking-widest mb-1">New Run Completed!</div>
@@ -2748,7 +2748,7 @@ const App: React.FC = () => {
         
         {/* MANAGEMENT MODAL */}
         {managementModalOpen && 
-            <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-md p-4 pt-[calc(env(safe-area-inset-top)+1rem)] pb-[calc(env(safe-area-inset-bottom)+1rem)] pl-[calc(env(safe-area-inset-left)+1rem)] pr-[calc(env(safe-area-inset-right)+1rem)] transition-opacity">
+            <div className="modal-safe fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-md transition-opacity">
                   <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-lg w-full border border-slate-200 dark:border-slate-700 transform transition-all scale-100 mx-auto max-h-[calc(100dvh-2rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] overflow-y-auto">
                     <h3 className="text-xl font-bold mb-4 border-b pb-2 text-slate-700 dark:text-slate-200">Manage Profiles & Devices</h3>
                      <div className="flex gap-4">

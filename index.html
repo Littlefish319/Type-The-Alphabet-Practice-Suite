@@ -39,7 +39,29 @@
     <style>
         html, body { height: 100%; }
         #root { height: 100%; }
+        body { margin: 0; }
         body { transition: background-color 0.3s, color 0.3s; }
+
+        /* Safe-area helpers (iOS notch) */
+        .safe-shell {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            padding-left: calc(env(safe-area-inset-left) + 0.75rem);
+            padding-right: calc(env(safe-area-inset-right) + 0.75rem);
+        }
+        @media (min-width: 640px) {
+            .safe-shell {
+                padding-left: calc(env(safe-area-inset-left) + 1.5rem);
+                padding-right: calc(env(safe-area-inset-right) + 1.5rem);
+            }
+        }
+
+        .modal-safe {
+            padding-top: calc(env(safe-area-inset-top) + 1rem);
+            padding-bottom: calc(env(safe-area-inset-bottom) + 1rem);
+            padding-left: calc(env(safe-area-inset-left) + 1rem);
+            padding-right: calc(env(safe-area-inset-right) + 1rem);
+        }
 
         /* --- PROFESSIONAL MODE (VIP) --- */
         body.pro-mode {
