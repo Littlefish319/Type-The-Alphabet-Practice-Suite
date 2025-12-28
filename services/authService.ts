@@ -3,6 +3,7 @@ import {
     GoogleAuthProvider,
     OAuthProvider,
     createUserWithEmailAndPassword,
+    deleteUser,
     getRedirectResult,
     onAuthStateChanged,
     sendPasswordResetEmail,
@@ -109,4 +110,11 @@ export const signInWithAppleWeb = async (): Promise<User> => {
 
 export const signOutUser = async (): Promise<void> => {
     await signOut(requireAuth());
+};
+
+export const deleteCurrentUser = async (): Promise<void> => {
+    const auth = requireAuth();
+    const u = auth.currentUser;
+    if (!u) throw new Error('Not signed in.');
+    await deleteUser(u);
 };

@@ -1,4 +1,4 @@
-import { doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import type { LocalData, Settings } from '../types';
 import { getDbIfConfigured } from './firebase';
 
@@ -30,6 +30,10 @@ export const pullCloudEnvelope = async (uid: string): Promise<CloudEnvelope | nu
 
 export const pushCloudEnvelope = async (uid: string, envelope: CloudEnvelope): Promise<void> => {
     await setDoc(docRefForUser(uid), envelope, { merge: false });
+};
+
+export const deleteCloudEnvelope = async (uid: string): Promise<void> => {
+    await deleteDoc(docRefForUser(uid));
 };
 
 export const subscribeCloudEnvelope = (

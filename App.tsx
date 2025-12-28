@@ -206,6 +206,8 @@ const App: React.FC = () => {
                 return 'Firebase: Error (auth/invalid-email). Check the email address.';
             case 'auth/too-many-requests':
                 return 'Firebase: Error (auth/too-many-requests). Try again later.';
+            case 'auth/requires-recent-login':
+                return 'Firebase: Error (auth/requires-recent-login). For security, sign out then sign back in, and try again.';
             case 'auth/popup-blocked':
                 return 'Firebase: Error (auth/popup-blocked). Allow popups, then try again.';
             default:
@@ -2535,6 +2537,11 @@ const App: React.FC = () => {
                                     <div className="text-sm font-bold text-slate-800 dark:text-slate-200">Signed in</div>
                                     <div className="mt-1 text-sm text-slate-600 dark:text-slate-300 break-all">{user.email || user.uid}</div>
 
+                                    <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                                        Support: <a className="underline" href="/support.html" target="_blank" rel="noreferrer">support</a> ·
+                                        Privacy: <a className="underline" href="/privacy.html" target="_blank" rel="noreferrer">privacy policy</a>
+                                    </div>
+
                                     <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
                                         <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
                                             <div className="text-[10px] uppercase font-bold text-slate-400">Sync</div>
@@ -2581,6 +2588,41 @@ const App: React.FC = () => {
                                         className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
                                     >
                                         Sign Out
+                                    </button>
+
+                                    <button
+                                        onClick={() =>
+                                            void (async () => {
+                                                if (!user) return;
+                                                const ok = window.confirm(
+                                                    'Delete account?\n\nThis permanently deletes your cloud sync data and your account. This cannot be undone.'
+                                                );
+                                                if (!ok) return;
+
+                                                setAuthBusy(true);
+                                                setAuthError(null);
+                                                setAuthNotice(null);
+
+                                                try {
+                                                    const { deleteCloudEnvelope } = await loadCloudSync();
+                                                    await deleteCloudEnvelope(user.uid);
+
+                                                    const { deleteCurrentUser } = await loadAuthService();
+                                                    await deleteCurrentUser();
+
+                                                    setAuthNotice('Account deleted.');
+                                                } catch (e: any) {
+                                                    console.warn('Account deletion failed:', e);
+                                                    setAuthError(formatFirebaseAuthError(e));
+                                                } finally {
+                                                    setAuthBusy(false);
+                                                }
+                                            })()
+                                        }
+                                        disabled={authBusy}
+                                        className="bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-red-700 disabled:bg-red-400"
+                                    >
+                                        Delete Account
                                     </button>
                                 </div>
                             </div>
@@ -2756,10 +2798,10 @@ const App: React.FC = () => {
             {/* Footer / Copyright */}
             <div className="mt-12 pt-8 border-t border-slate-100 dark:border-slate-800 text-center">
                 <p className="text-sm font-bold text-slate-400 dark:text-slate-600">
-                    Made with ❤️ by <span className="text-blue-500">Xiaoyu Tang</span> @ <span className="text-slate-700 dark:text-slate-400 font-black">YuNova LLC</span>
+                    Made with ❤️ by <span className="text-blue-500">Xiaoyu Tang</span> @ <span className="text-slate-700 dark:text-slate-400 font-black">YUNOVA, LLC</span>
                 </p>
                 <p className="text-[10px] uppercase tracking-widest text-slate-300 dark:text-slate-700 mt-2">
-                    © {new Date().getFullYear()} YuNova LLC. All Rights Reserved.
+                    © {new Date().getFullYear()} YUNOVA, LLC. All Rights Reserved.
                 </p>
             </div>
 

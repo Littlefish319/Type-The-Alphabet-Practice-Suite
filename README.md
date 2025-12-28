@@ -6,6 +6,13 @@
 
 AlphaTyper is a practice + analytics tool for typing the alphabet faster.
 
+## App Store URLs
+
+If you deploy to Vercel at `https://alphatyper.vercel.app`, these pages are available at:
+
+- Support: `https://alphatyper.vercel.app/support.html`
+- Privacy policy: `https://alphatyper.vercel.app/privacy.html`
+
 ## Account Login + Cloud Sync (Optional)
 
 The app can optionally support signing in and syncing your data across devices via Firebase.
@@ -34,6 +41,10 @@ When Firebase env vars are not set, the app still works normally, but the `Accou
 Email/password works on both web and the Capacitor iOS build.
 
 Google/Apple sign-in for iOS is not enabled in this repo yet (it requires native configuration). If you want Google sign-in inside iOS, Apple will also require **Sign in with Apple**.
+
+### Account deletion (App Review)
+
+If you allow account creation, Apple generally expects in-app account deletion. This repo includes a delete option in the `Account` tab for signed-in users.
 
 ### Apple Sign-In (Web) Prerequisites
 
