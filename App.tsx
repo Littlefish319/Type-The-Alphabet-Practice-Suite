@@ -6,9 +6,12 @@ import { STORAGE_KEY, MAX_ENTRIES, ALPHABET, FINGERING_DATA, TONY_GROUPS_ROW1, T
 import { APP_MAKER_LINE, APP_NAME, APP_TAGLINE } from './branding';
 import { getCoachingTip } from './services/geminiService';
 import { firebaseEnvStatus, isFirebaseConfigured } from './services/firebase';
-import { canUseAppleSignIn, canUseGoogleSignIn, consumeAuthRedirectResult, resetPassword, signInWithAppleWeb, signInWithEmail, signInWithGoogleWeb, signOutUser, signUpWithEmail, watchAuth } from './services/authService';
-import { pullCloudEnvelope, pushCloudEnvelope, subscribeCloudEnvelope, type CloudEnvelope } from './services/cloudSync';
+import type { CloudEnvelope } from './services/cloudSync';
 import { envelopesEqual, ensureRunIds, mergeEnvelopes } from './services/syncMerge';
+import { getDeviceIdentity, type DeviceIdentity } from './services/deviceIdentity';
+
+const loadAuthService = () => import('./services/authService');
+const loadCloudSync = () => import('./services/cloudSync');
 
 // --- AUDIO UTILS ---
 let synth: any = null;
@@ -118,6 +121,23 @@ const App: React.FC = () => {
     const [countdown, setCountdown] = useState<string | null>(null);
     const [flashEffect, setFlashEffect] = useState(false);
 
+    const [deviceIdentity, setDeviceIdentity] = useState<DeviceIdentity | null>(null);
+
+    useEffect(() => {
+        let cancelled = false;
+        void (async () => {
+            try {
+                const identity = await getDeviceIdentity();
+                if (!cancelled) setDeviceIdentity(identity);
+            } catch {
+                // Non-fatal
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
     // --- UI MODE ---
     const PROFESSIONAL_MODE_STORAGE_KEY = 'alphabetTypingSuite.professionalMode';
     const [professionalMode, setProfessionalMode] = useState<boolean>(() => {
@@ -208,6 +228,15 @@ const App: React.FC = () => {
 
     const isAiAvailable = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
 
+    const canUseOAuthOnThisPlatform = useMemo(() => {
+        try {
+            // Avoid importing Capacitor eagerly; rely on global injected object when present.
+            return !(globalThis as any)?.Capacitor?.isNativePlatform?.();
+        } catch {
+            return true;
+        }
+    }, []);
+
     const alphaLetters = useMemo(() => ALPHABET.split(''), []);
     const tonyFingeringMap = useMemo<Record<string, string>>(() => {
         const map: Record<string, string> = {};
@@ -240,6 +269,22 @@ const App: React.FC = () => {
     const blankInputRef = useRef<HTMLTextAreaElement>(null);
     const runNoteRef = useRef<HTMLTextAreaElement>(null);
     const chatContainerRef = useRef<HTMLDivElement>(null);
+
+    const isNativeIOS = useMemo(() => {
+        try {
+            const cap = (globalThis as any)?.Capacitor;
+            const isNative = Boolean(cap?.isNativePlatform?.());
+            if (!isNative) return false;
+            const platform = cap?.getPlatform?.();
+            if (platform === 'ios') return true;
+            const ua = (navigator.userAgent || '').toLowerCase();
+            return ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod');
+        } catch {
+            return false;
+        }
+    }, []);
+
+    const keyboardRequestedRef = useRef(false);
 
     // --- TARGET SEQUENCE ---
     const targetSequence = useMemo(
@@ -312,17 +357,37 @@ const App: React.FC = () => {
             setSyncStatus('off');
             return;
         }
-        const unsub = watchAuth((u) => setUser(u));
-        return () => unsub();
+        let unsub: (() => void) | null = null;
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const { watchAuth } = await loadAuthService();
+                if (cancelled) return;
+                unsub = watchAuth((u) => setUser(u));
+            } catch (e) {
+                console.error('Failed to load auth service:', e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            unsub?.();
+        };
     }, [firebaseEnabled]);
 
     useEffect(() => {
         if (!firebaseEnabled) return;
         // Needed for OAuth redirect flows (Google/Apple) to complete on return.
-        void consumeAuthRedirectResult().catch((e) => {
-            // No redirect result (common) or provider not configured.
-            console.warn('Auth redirect result not available:', e);
-        });
+        (async () => {
+            try {
+                const { consumeAuthRedirectResult } = await loadAuthService();
+                await consumeAuthRedirectResult();
+            } catch (e) {
+                // No redirect result (common) or provider not configured.
+                console.warn('Auth redirect result not available:', e);
+            }
+        })();
     }, [firebaseEnabled]);
 
     const applyCloudEnvelope = useCallback((env: CloudEnvelope) => {
@@ -356,6 +421,7 @@ const App: React.FC = () => {
         };
 
         try {
+            const { pushCloudEnvelope } = await loadCloudSync();
             await pushCloudEnvelope(user.uid, envelope);
             setSyncStatus('idle');
             setLastSyncAt(Date.now());
@@ -375,6 +441,7 @@ const App: React.FC = () => {
 
         (async () => {
             try {
+            const { pullCloudEnvelope, pushCloudEnvelope, subscribeCloudEnvelope } = await loadCloudSync();
                 const cloud = await pullCloudEnvelope(user.uid);
                 if (cancelled) return;
 
@@ -420,43 +487,52 @@ const App: React.FC = () => {
             }
         })();
 
-        const unsub = subscribeCloudEnvelope(user.uid, (env) => {
-            if (!env) return;
+        let unsub: (() => void) | null = null;
+        (async () => {
+            try {
+                const { subscribeCloudEnvelope, pushCloudEnvelope } = await loadCloudSync();
+                if (cancelled) return;
+                unsub = subscribeCloudEnvelope(user.uid, (env) => {
+                    if (!env) return;
 
-            const localEnv: CloudEnvelope = {
-                schemaVersion: 1,
-                updatedAt: localUpdatedAtRef.current || 0,
-                localData: {
-                    ...localDataRef.current,
-                    history: ensureRunIds(localDataRef.current.history || []),
-                },
-                settings: settingsRef.current,
-            };
+                    const localEnv: CloudEnvelope = {
+                        schemaVersion: 1,
+                        updatedAt: localUpdatedAtRef.current || 0,
+                        localData: {
+                            ...localDataRef.current,
+                            history: ensureRunIds(localDataRef.current.history || []),
+                        },
+                        settings: settingsRef.current,
+                    };
 
-            const merged = mergeEnvelopes(localEnv, env);
-            const mergedEnv: CloudEnvelope = {
-                schemaVersion: 1,
-                updatedAt: merged.updatedAt,
-                localData: merged.localData,
-                settings: merged.settings,
-            };
+                    const merged = mergeEnvelopes(localEnv, env);
+                    const mergedEnv: CloudEnvelope = {
+                        schemaVersion: 1,
+                        updatedAt: merged.updatedAt,
+                        localData: merged.localData,
+                        settings: merged.settings,
+                    };
 
-            if (!envelopesEqual(mergedEnv, localEnv) || mergedEnv.updatedAt !== localEnv.updatedAt) {
-                applyCloudEnvelope(mergedEnv);
-                setLastSyncAt(Date.now());
-                setSyncStatus('idle');
-            }
+                    if (!envelopesEqual(mergedEnv, localEnv) || mergedEnv.updatedAt !== localEnv.updatedAt) {
+                        applyCloudEnvelope(mergedEnv);
+                        setLastSyncAt(Date.now());
+                        setSyncStatus('idle');
+                    }
 
-            if (!envelopesEqual(mergedEnv, env) || mergedEnv.updatedAt !== env.updatedAt) {
-                void pushCloudEnvelope(user.uid, mergedEnv).catch((e) => {
-                    console.error('Cloud reconcile push failed', e);
+                    if (!envelopesEqual(mergedEnv, env) || mergedEnv.updatedAt !== env.updatedAt) {
+                        void pushCloudEnvelope(user.uid, mergedEnv).catch((e) => {
+                            console.error('Cloud reconcile push failed', e);
+                        });
+                    }
                 });
+            } catch (e) {
+                console.error('Failed to start cloud subscription:', e);
             }
-        });
+        })();
 
         return () => {
             cancelled = true;
-            unsub();
+            unsub?.();
         };
     }, [applyCloudEnvelope, firebaseEnabled, pushNow, user]);
 
@@ -481,6 +557,10 @@ const App: React.FC = () => {
 
     // --- FOCUS MANAGEMENT ---
     const focusCorrectInput = useCallback(() => {
+        // On iOS native, avoid automatic focus changes (causes keyboard pop/bounce).
+        // We only focus the typing input after an explicit user gesture.
+        if (isNativeIOS && !keyboardRequestedRef.current) return;
+
         if (resultsModalOpen) {
             runNoteRef.current?.focus();
         } else if (view === 'practice') {
@@ -490,14 +570,20 @@ const App: React.FC = () => {
                 hiddenInputRef.current?.focus();
             }
         }
-    }, [view, settings.mode, resultsModalOpen]);
+    }, [isNativeIOS, view, settings.mode, resultsModalOpen]);
 
     const requestKeyboard = useCallback(() => {
         if (resultsModalOpen || managementModalOpen) return;
         if (view !== 'practice') return;
 
+        keyboardRequestedRef.current = true;
+
         if (settings.mode === 'blank') {
-            blankInputRef.current?.focus();
+            try {
+                (blankInputRef.current as any)?.focus?.({ preventScroll: true });
+            } catch {
+                blankInputRef.current?.focus();
+            }
             return;
         }
 
@@ -505,24 +591,22 @@ const App: React.FC = () => {
         if (!el) return;
 
         try {
-            // iOS/WKWebView can be picky; a direct + deferred focus helps.
             (el as any).focus?.({ preventScroll: true });
         } catch {
             el.focus();
         }
-        el.click();
-        window.setTimeout(() => {
-            try {
-                (el as any).focus?.({ preventScroll: true });
-            } catch {
-                el.focus();
-            }
-        }, 0);
     }, [blankInputRef, hiddenInputRef, managementModalOpen, resultsModalOpen, settings.mode, view]);
 
     useEffect(() => {
        focusCorrectInput();
     }, [focusCorrectInput]);
+
+    useEffect(() => {
+        // When leaving practice or opening modals, stop trying to keep the typing input focused.
+        if (view !== 'practice' || resultsModalOpen || managementModalOpen) {
+            keyboardRequestedRef.current = false;
+        }
+    }, [managementModalOpen, resultsModalOpen, view]);
 
     // --- GAME LOGIC ---
 
@@ -637,6 +721,9 @@ const App: React.FC = () => {
             mode: settings.mode,
             profile: localData.currentProfile,
             device: localData.currentDevice,
+            deviceId: deviceIdentity?.deviceId,
+            deviceLabel: deviceIdentity?.deviceLabel,
+            platform: deviceIdentity?.platform,
             blind: settings.blind,
             note: "", 
             timestamp: Date.now(),
@@ -1338,7 +1425,7 @@ const App: React.FC = () => {
                 {letters.map(ch => (
                     <div key={ch} className="flex items-center gap-2 px-2 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
                         <span className="font-mono font-black text-slate-800 dark:text-white">{ch.toUpperCase()}</span>
-                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${((map[ch] || '?').startsWith('L')) ? 'fingering-badge fingering-L' : ((map[ch] || '?').startsWith('R') ? 'fingering-badge fingering-R' : 'bg-slate-500 text-white')}`}>{map[ch] || '?'}</span>
+                        <span className={`text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm ${((map[ch] || '?').startsWith('L')) ? 'fingering-L' : ((map[ch] || '?').startsWith('R') ? 'fingering-R' : 'bg-slate-500 text-white')}`}>{map[ch] || '?'}</span>
                     </div>
                 ))}
             </div>
@@ -1424,8 +1511,8 @@ const App: React.FC = () => {
         <div
             className={
                 professionalMode
-                    ? 'relative min-h-screen w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 px-3 sm:px-6 overflow-hidden'
-                    : 'min-h-screen w-full flex justify-center bg-slate-50 dark:bg-slate-950 px-3 sm:px-6'
+                    ? 'relative min-h-[100dvh] w-full flex justify-center bg-gradient-to-b from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 px-3 sm:px-6 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
+                    : 'min-h-[100dvh] w-full flex justify-center bg-slate-50 dark:bg-slate-950 px-3 sm:px-6 overflow-x-hidden overflow-y-auto pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]'
             }
         >
         {professionalMode && (
@@ -1752,10 +1839,6 @@ const App: React.FC = () => {
                 <div
                     className={`relative min-h-[320px] sm:min-h-[350px] flex flex-col items-center justify-center bg-slate-100 dark:bg-slate-800/50 rounded-2xl p-4 sm:p-8 overflow-hidden transition-all duration-300 ${isError ? 'animate-shake' : ''} ${settings.mode === 'guinness' && gameState.started && !gameState.finished ? 'border-2 border-red-500 shadow-lg shadow-red-500/10' : 'border border-slate-200 dark:border-slate-800'}`}
                     onPointerDown={() => {
-                        requestKeyboard();
-                        ensureAudioContext();
-                    }}
-                    onTouchStart={() => {
                         requestKeyboard();
                         ensureAudioContext();
                     }}
@@ -2288,7 +2371,10 @@ const App: React.FC = () => {
                                         {r.specialized?.enabled ? ` [${r.specialized.start.toUpperCase()}-${r.specialized.end.toUpperCase()}]` : ''}
                                         {r.blind ? ' (Blind)' : ''}
                                     </td>
-                                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2 text-xs text-slate-500">{r.device}</td>
+                                    <td className="hidden sm:table-cell px-3 sm:px-4 py-2 text-xs text-slate-500">
+                                        <div>{r.device}</div>
+                                        {r.deviceLabel && <div className="text-[10px] text-slate-400">{r.deviceLabel}</div>}
+                                    </td>
                                     <td className="px-3 sm:px-4 py-2 font-mono font-bold whitespace-nowrap">
                                         {r.time.toFixed(2)}s
                                         {!r.specialized?.enabled && r.time === personalBestTime && <span className="ml-2 text-amber-500" title="Personal Best">★</span>}
@@ -2433,7 +2519,16 @@ const App: React.FC = () => {
                                         Sync Now
                                     </button>
                                     <button
-                                        onClick={() => void signOutUser()}
+                                        onClick={() =>
+                                            void (async () => {
+                                                try {
+                                                    const { signOutUser } = await loadAuthService();
+                                                    await signOutUser();
+                                                } catch (e) {
+                                                    console.warn('Sign out failed:', e);
+                                                }
+                                            })()
+                                        }
                                         className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-200 dark:hover:bg-slate-700"
                                     >
                                         Sign Out
@@ -2486,6 +2581,7 @@ const App: React.FC = () => {
                                                 setAuthNotice(null);
                                                 try {
                                                     const email = authEmail.trim().toLowerCase();
+                                                    const { signInWithEmail } = await loadAuthService();
                                                     await signInWithEmail(email, authPassword);
                                                 } catch (e: any) {
                                                     console.warn('Email sign-in failed:', e);
@@ -2506,6 +2602,7 @@ const App: React.FC = () => {
                                                 setAuthNotice(null);
                                                 try {
                                                     const email = authEmail.trim().toLowerCase();
+                                                    const { signUpWithEmail } = await loadAuthService();
                                                     await signUpWithEmail(email, authPassword);
                                                 } catch (e: any) {
                                                     console.warn('Email sign-up failed:', e);
@@ -2526,6 +2623,7 @@ const App: React.FC = () => {
                                                 setAuthNotice(null);
                                                 try {
                                                     const email = authEmail.trim().toLowerCase();
+                                                    const { resetPassword } = await loadAuthService();
                                                     await resetPassword(email);
                                                     setAuthNotice('Password reset requested. If the account exists, you will receive an email (check Spam/Junk).');
                                                 } catch (e: any) {
@@ -2543,52 +2641,59 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
 
-                                {(canUseGoogleSignIn() || canUseAppleSignIn()) && (
+                                {canUseOAuthOnThisPlatform && (
                                     <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5">
                                         <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Or</div>
-                                        {canUseGoogleSignIn() && (
-                                            <button
-                                                onClick={async () => {
-                                                    setAuthBusy(true);
-                                                    setAuthError(null);
-                                                    try {
-                                                        await signInWithGoogleWeb();
-                                                    } catch (e: any) {
-                                                        // Popup blocked may trigger redirect. Either way, show a minimal message.
-                                                        console.warn('Google sign-in failed:', e);
-                                                        setAuthError(formatFirebaseAuthError(e));
-                                                    } finally {
-                                                        setAuthBusy(false);
-                                                    }
-                                                }}
-                                                disabled={authBusy}
-                                                className="mt-3 bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-800 disabled:bg-slate-600"
-                                            >
-                                                Continue with Google (Web)
-                                            </button>
-                                        )}
+                                        <button
+                                            onClick={async () => {
+                                                setAuthBusy(true);
+                                                setAuthError(null);
+                                                try {
+                                                    const { signInWithGoogleWeb } = await loadAuthService();
+                                                    await signInWithGoogleWeb();
+                                                } catch (e: any) {
+                                                    // Popup blocked may trigger redirect. Either way, show a minimal message.
+                                                    console.warn('Google sign-in failed:', e);
+                                                    setAuthError(formatFirebaseAuthError(e));
+                                                } finally {
+                                                    setAuthBusy(false);
+                                                }
+                                            }}
+                                            disabled={authBusy}
+                                            className="mt-3 bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-800 disabled:bg-slate-600"
+                                        >
+                                            Continue with Google (Web)
+                                        </button>
 
-                                        {canUseAppleSignIn() && (
-                                            <button
-                                                onClick={async () => {
-                                                    setAuthBusy(true);
-                                                    setAuthError(null);
-                                                    try {
-                                                        await signInWithAppleWeb();
-                                                    } catch (e: any) {
-                                                        console.warn('Apple sign-in failed:', e);
-                                                        setAuthError(formatFirebaseAuthError(e));
-                                                    } finally {
-                                                        setAuthBusy(false);
-                                                    }
-                                                }}
-                                                disabled={authBusy}
-                                                className="mt-2 bg-black text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-900 disabled:bg-slate-600"
-                                            >
-                                                Continue with Apple (Web)
-                                            </button>
-                                        )}
+                                        <button
+                                            onClick={async () => {
+                                                setAuthBusy(true);
+                                                setAuthError(null);
+                                                try {
+                                                    const { signInWithAppleWeb } = await loadAuthService();
+                                                    await signInWithAppleWeb();
+                                                } catch (e: any) {
+                                                    console.warn('Apple sign-in failed:', e);
+                                                    setAuthError(formatFirebaseAuthError(e));
+                                                } finally {
+                                                    setAuthBusy(false);
+                                                }
+                                            }}
+                                            disabled={authBusy}
+                                            className="mt-2 bg-black text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-900 disabled:bg-slate-600"
+                                        >
+                                            Continue with Apple (Web)
+                                        </button>
+
                                         <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                            iOS uses email/password for now (Google/Apple sign-in needs extra native setup).
+                                        </div>
+                                    </div>
+                                )}
+
+                                {!canUseOAuthOnThisPlatform && (
+                                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-5">
+                                        <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                                             iOS uses email/password for now (Google/Apple sign-in needs extra native setup).
                                         </div>
                                     </div>

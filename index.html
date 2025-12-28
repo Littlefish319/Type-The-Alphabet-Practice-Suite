@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>AlphaTyper: The Alphabet Typing Suite</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <!-- Tone.js for sounds (Keeping CDN as App.tsx relies on global window.Tone) -->
@@ -37,6 +37,7 @@
         }
     </script>
     <style>
+        html, body { height: 100%; }
         body { transition: background-color 0.3s, color 0.3s; }
 
         /* --- PROFESSIONAL MODE (VIP) --- */

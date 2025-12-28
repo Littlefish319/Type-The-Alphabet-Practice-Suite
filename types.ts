@@ -51,6 +51,9 @@ export interface Run {
     mode: GameMode;
     profile: string;
     device: string;
+    deviceId?: string;
+    deviceLabel?: string;
+    platform?: 'web' | 'ios' | 'android' | 'unknown';
     blind: boolean;
     note: string;
     timestamp: number;

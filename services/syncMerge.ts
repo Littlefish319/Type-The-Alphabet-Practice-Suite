@@ -49,6 +49,10 @@ const pickBetterRun = (a: Run, b: Run): Run => {
     if (!merged.mistakeLog && b.mistakeLog) merged.mistakeLog = b.mistakeLog;
     if (!merged.specialized && b.specialized) merged.specialized = b.specialized;
 
+    if (!merged.deviceId && b.deviceId) merged.deviceId = b.deviceId;
+    if (!merged.deviceLabel && b.deviceLabel) merged.deviceLabel = b.deviceLabel;
+    if (!merged.platform && b.platform) merged.platform = b.platform;
+
     return merged;
 };
 

@@ -61,9 +61,6 @@
         shape-rendering="geometricPrecision"
       >Typer</text>
 
-    <!-- Forward accent slash -->
-      <path d="M338 190L410 262" stroke="#38BDF8" stroke-width="10" stroke-linecap="round" opacity="0.33"/>
-      <path d="M362 206L396 240" stroke="#38BDF8" stroke-width="16" stroke-linecap="round"/>
     </g>
   </g>
 </svg>
