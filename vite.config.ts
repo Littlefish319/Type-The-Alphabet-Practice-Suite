@@ -7,6 +7,17 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, (process as any).cwd(), '');
   return {
     plugins: [react()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            react: ['react', 'react-dom'],
+            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+            genai: ['@google/genai']
+          }
+        }
+      }
+    },
     define: {
       // Shims process.env.API_KEY so the existing code works without modification
       'process.env.API_KEY': JSON.stringify(env.API_KEY),

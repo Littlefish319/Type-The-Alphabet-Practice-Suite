@@ -25,6 +25,11 @@ In App Store Connect:
   - SKU: `alphatyper-001` (any unique string)
   - User Access: Full Access
 
+### 3a) iPad + Mac availability (recommended)
+- iPad: in Xcode Target → General, ensure the app supports both iPhone + iPad (this project already targets `1,2`).
+- Mac (Apple silicon): after your first build is uploaded, enable the App Store Connect option to make the iPhone/iPad app available on Mac computers with Apple silicon (if eligible).
+  - Common blockers: requiring phone-only hardware features or setting restrictive `UIRequiredDeviceCapabilities` in `Info.plist`.
+
 Fill required metadata:
 - Privacy Policy URL: `https://alphatyper.vercel.app/privacy.html`
 - Support URL: `https://alphatyper.vercel.app/support.html`
