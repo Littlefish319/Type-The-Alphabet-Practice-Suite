@@ -2495,6 +2495,10 @@ const App: React.FC = () => {
                             </p>
                             <div className="mt-3 text-sm font-bold text-slate-500 dark:text-slate-400">— Xiaoyu Tang</div>
                         </div>
+
+                        <div className="mt-5 text-sm text-slate-500 dark:text-slate-400">
+                            Company: <a className="underline font-bold" href="https://yunova.org" target="_blank" rel="noreferrer">yunova.org</a>
+                        </div>
                     </div>
 
                     <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
