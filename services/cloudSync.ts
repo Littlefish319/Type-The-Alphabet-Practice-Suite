@@ -2,11 +2,16 @@ import { deleteDoc, doc, getDoc, onSnapshot, setDoc } from 'firebase/firestore';
 import type { LocalData, Settings } from '../types';
 import { getDbIfConfigured } from './firebase';
 
+export interface UiPrefs {
+    professionalMode?: boolean;
+}
+
 export interface CloudEnvelope {
     schemaVersion: 1;
     updatedAt: number;
     localData: LocalData;
     settings: Settings;
+    ui?: UiPrefs;
 }
 
 const docRefForUser = (uid: string) => {
@@ -25,6 +30,7 @@ export const pullCloudEnvelope = async (uid: string): Promise<CloudEnvelope | nu
         updatedAt: data.updatedAt,
         localData: data.localData as LocalData,
         settings: data.settings as Settings,
+        ui: (data.ui && typeof data.ui === 'object') ? (data.ui as UiPrefs) : undefined,
     };
 };
 
@@ -55,6 +61,7 @@ export const subscribeCloudEnvelope = (
             updatedAt: data.updatedAt,
             localData: data.localData as LocalData,
             settings: data.settings as Settings,
+            ui: (data.ui && typeof data.ui === 'object') ? (data.ui as UiPrefs) : undefined,
         });
     });
 };

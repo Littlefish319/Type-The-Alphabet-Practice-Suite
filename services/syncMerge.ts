@@ -1,4 +1,5 @@
 import type { LocalData, Run, Settings, FingerPattern, RhythmPattern } from '../types';
+import type { UiPrefs } from './cloudSync';
 
 const fnv1a = (input: string): string => {
     let hash = 0x811c9dc5;
@@ -133,6 +134,11 @@ export const mergeSettings = (primary: Settings, secondary: Settings): Settings 
     return { ...secondary, ...primary };
 };
 
+export const mergeUiPrefs = (primary?: UiPrefs, secondary?: UiPrefs): UiPrefs | undefined => {
+    if (!primary && !secondary) return undefined;
+    return { ...(secondary || {}), ...(primary || {}) };
+};
+
 const hashJson = (value: unknown): string => {
     try {
         return fnv1a(JSON.stringify(value));
@@ -142,29 +148,34 @@ const hashJson = (value: unknown): string => {
 };
 
 export const envelopesEqual = (
-    a: { localData: LocalData; settings: Settings },
-    b: { localData: LocalData; settings: Settings }
+    a: { localData: LocalData; settings: Settings; ui?: UiPrefs },
+    b: { localData: LocalData; settings: Settings; ui?: UiPrefs }
 ): boolean => {
-    return hashJson(a.localData) === hashJson(b.localData) && hashJson(a.settings) === hashJson(b.settings);
+    return (
+        hashJson(a.localData) === hashJson(b.localData) &&
+        hashJson(a.settings) === hashJson(b.settings) &&
+        hashJson(a.ui || null) === hashJson(b.ui || null)
+    );
 };
 
-export const mergeEnvelopes = <T extends { updatedAt: number; localData: LocalData; settings: Settings }>(
+export const mergeEnvelopes = <T extends { updatedAt: number; localData: LocalData; settings: Settings; ui?: UiPrefs }>(
     local: T,
     cloud: T
-): { updatedAt: number; localData: LocalData; settings: Settings; didMerge: boolean } => {
+): { updatedAt: number; localData: LocalData; settings: Settings; ui?: UiPrefs; didMerge: boolean } => {
     const localIsPrimary = (local.updatedAt || 0) >= (cloud.updatedAt || 0);
     const primary = localIsPrimary ? local : cloud;
     const secondary = localIsPrimary ? cloud : local;
 
     const mergedLocalData = mergeLocalData(primary.localData, secondary.localData);
     const mergedSettings = mergeSettings(primary.settings, secondary.settings);
+    const mergedUi = mergeUiPrefs(primary.ui, secondary.ui);
 
-    const primaryHash = hashJson({ localData: primary.localData, settings: primary.settings });
-    const mergedHash = hashJson({ localData: mergedLocalData, settings: mergedSettings });
+    const primaryHash = hashJson({ localData: primary.localData, settings: primary.settings, ui: primary.ui || null });
+    const mergedHash = hashJson({ localData: mergedLocalData, settings: mergedSettings, ui: mergedUi || null });
     const didMerge = primaryHash !== mergedHash;
 
     const baseUpdatedAt = Math.max(local.updatedAt || 0, cloud.updatedAt || 0);
     const updatedAt = didMerge ? Date.now() : baseUpdatedAt;
 
-    return { updatedAt, localData: mergedLocalData, settings: mergedSettings, didMerge };
+    return { updatedAt, localData: mergedLocalData, settings: mergedSettings, ui: mergedUi, didMerge };
 };

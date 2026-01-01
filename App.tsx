@@ -148,6 +148,11 @@ const App: React.FC = () => {
         }
     });
 
+    const professionalModeRef = useRef<boolean>(professionalMode);
+    useEffect(() => {
+        professionalModeRef.current = professionalMode;
+    }, [professionalMode]);
+
     useEffect(() => {
         try {
             localStorage.setItem(PROFESSIONAL_MODE_STORAGE_KEY, professionalMode ? '1' : '0');
@@ -400,6 +405,11 @@ const App: React.FC = () => {
             history: ensureRunIds(env.localData.history || []),
         });
         setSettings(env.settings);
+
+        if (typeof env.ui?.professionalMode === 'boolean') {
+            setProfessionalMode(env.ui.professionalMode);
+        }
+
         window.setTimeout(() => {
             applyingRemoteRef.current = false;
         }, 0);
@@ -420,6 +430,9 @@ const App: React.FC = () => {
                 history: ensureRunIds(localDataRef.current.history || []),
             },
             settings: settingsRef.current,
+            ui: {
+                professionalMode: professionalModeRef.current,
+            },
         };
 
         try {
@@ -461,6 +474,9 @@ const App: React.FC = () => {
                         history: ensureRunIds(localDataRef.current.history || []),
                     },
                     settings: settingsRef.current,
+                    ui: {
+                        professionalMode: professionalModeRef.current,
+                    },
                 };
 
                 const merged = mergeEnvelopes(localEnv, cloud);
@@ -469,6 +485,7 @@ const App: React.FC = () => {
                     updatedAt: merged.updatedAt,
                     localData: merged.localData,
                     settings: merged.settings,
+                    ui: merged.ui,
                 };
 
                 if (!envelopesEqual(mergedEnv, localEnv) || mergedEnv.updatedAt !== localEnv.updatedAt) {
@@ -505,6 +522,9 @@ const App: React.FC = () => {
                             history: ensureRunIds(localDataRef.current.history || []),
                         },
                         settings: settingsRef.current,
+                        ui: {
+                            professionalMode: professionalModeRef.current,
+                        },
                     };
 
                     const merged = mergeEnvelopes(localEnv, env);
@@ -513,6 +533,7 @@ const App: React.FC = () => {
                         updatedAt: merged.updatedAt,
                         localData: merged.localData,
                         settings: merged.settings,
+                        ui: merged.ui,
                     };
 
                     if (!envelopesEqual(mergedEnv, localEnv) || mergedEnv.updatedAt !== localEnv.updatedAt) {
@@ -550,7 +571,7 @@ const App: React.FC = () => {
         return () => {
             if (pushTimerRef.current) window.clearTimeout(pushTimerRef.current);
         };
-    }, [firebaseEnabled, localData, pushNow, settings, user]);
+    }, [firebaseEnabled, localData, professionalMode, pushNow, settings, user]);
     
     // --- UI COMPUTATIONS ---
     const currentProfileSettings = useMemo(() => {
