@@ -31,7 +31,21 @@ export default function YunovaLanding() {
       <div className="mx-auto max-w-5xl px-6 py-12">
         <header className="flex items-center justify-between gap-6">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500" />
+            <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 ring-1 ring-slate-900/10 shadow-lg flex items-center justify-center">
+              <svg width="26" height="26" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <defs>
+                  <linearGradient id="yunova-g" x1="10" y1="8" x2="58" y2="56" gradientUnits="userSpaceOnUse">
+                    <stop stopColor="#60A5FA" />
+                    <stop offset="0.55" stopColor="#22D3EE" />
+                    <stop offset="1" stopColor="#818CF8" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d="M14 12h10l8 14 8-14h10L38 36v16h-12V36L14 12z"
+                  fill="url(#yunova-g)"
+                />
+              </svg>
+            </div>
             <div>
               <div className="text-sm font-black tracking-wide text-slate-700">{COMPANY}</div>
               <div className="text-xs font-semibold text-slate-500">Product studio · Learning tools</div>
