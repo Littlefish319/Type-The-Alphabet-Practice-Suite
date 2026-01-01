@@ -2,6 +2,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import YunovaLanding from './YunovaLanding';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -9,8 +10,12 @@ if (!rootElement) {
 }
 
 const root = ReactDOM.createRoot(rootElement);
+
+const hostname = (globalThis.location?.hostname || '').toLowerCase();
+const isYunovaSite = hostname === 'yunova.org' || hostname === 'www.yunova.org';
+
 root.render(
   <React.StrictMode>
-    <App />
+    {isYunovaSite ? <YunovaLanding /> : <App />}
   </React.StrictMode>
 );
