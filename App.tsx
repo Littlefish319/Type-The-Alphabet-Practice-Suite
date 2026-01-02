@@ -321,6 +321,17 @@ const App: React.FC = () => {
         }
     }, []);
 
+    const isIOSBrowser = useMemo(() => {
+        try {
+            const ua = (navigator.userAgent || '').toLowerCase();
+            return ua.includes('iphone') || ua.includes('ipad') || ua.includes('ipod');
+        } catch {
+            return false;
+        }
+    }, []);
+
+    const isIOSLike = isNativeIOS || isIOSBrowser;
+
     const keyboardRequestedRef = useRef(false);
 
     // --- TARGET SEQUENCE ---
@@ -624,32 +635,32 @@ const App: React.FC = () => {
     }, []);
 
     const focusCorrectInput = useCallback(() => {
-        // iOS native: do not auto-focus (causes bounce + the <> Done bar).
-        if (isNativeIOS && !keyboardRequestedRef.current) return;
+        // iOS (Safari + native): do not auto-focus until the user requests the keyboard.
+        if (isIOSLike && !keyboardRequestedRef.current) return;
 
         if (resultsModalOpen) {
             // Don't auto-focus the note on iOS; user can tap it.
-            if (!isNativeIOS) runNoteRef.current?.focus();
+            if (!isIOSLike) runNoteRef.current?.focus();
             return;
         }
 
         if (view !== 'practice') return;
 
         if (settings.mode === 'blank') {
-            if (!isNativeIOS || !gameState.finished) {
+            if (!isIOSLike || !gameState.finished) {
                 blankInputRef.current?.focus();
             }
             return;
         }
 
         // Non-blank: on iOS only focus during countdown/active run.
-        if (isNativeIOS) {
+        if (isIOSLike) {
             const shouldFocus = Boolean(countdown) || (gameState.started && !gameState.finished);
             if (!shouldFocus) return;
         }
 
         hiddenInputRef.current?.focus();
-    }, [countdown, gameState.finished, gameState.started, isNativeIOS, resultsModalOpen, settings.mode, view]);
+    }, [countdown, gameState.finished, gameState.started, isIOSLike, resultsModalOpen, settings.mode, view]);
 
     const requestKeyboard = useCallback(() => {
         if (resultsModalOpen || managementModalOpen) return;
@@ -700,10 +711,11 @@ const App: React.FC = () => {
         setCompletedRun(null);
         setPostRunAnalysis([]);
         if (newMode) {
-             setSettings(s => ({...s, mode: newMode}));
+            bumpLocalUpdatedAt();
+            setSettings(s => ({ ...s, mode: newMode }));
         }
         setTimeout(focusCorrectInput, 50);
-    }, [blurTypingInputs, focusCorrectInput]);
+    }, [blurTypingInputs, bumpLocalUpdatedAt, focusCorrectInput]);
 
     const beginRun = useCallback((processFirstKey: boolean = false) => {
         const now = performance.now();
@@ -1645,8 +1657,12 @@ const App: React.FC = () => {
                             aria-checked={professionalMode}
                             onClick={() => {
                                 professionalModeDirtyRef.current = true;
-                                localUpdatedAtRef.current = Math.max(Date.now(), (localUpdatedAtRef.current || 0) + 1);
-                                setProfessionalMode(v => !v);
+                                bumpLocalUpdatedAt();
+                                setProfessionalMode(v => {
+                                    const next = !v;
+                                    professionalModeRef.current = next;
+                                    return next;
+                                });
                             }}
                             className={
                                 'relative inline-flex h-6 w-11 items-center rounded-full transition ' +
@@ -1662,13 +1678,29 @@ const App: React.FC = () => {
                         </button>
                     </div>
                     <div className="relative">
-                        <select value={localData.currentProfile} onChange={e => setLocalData({...localData, currentProfile: e.target.value})} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-white text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 outline-none appearance-none pr-8 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition w-32">
+                        <select
+                            value={localData.currentProfile}
+                            onChange={e => {
+                                bumpLocalUpdatedAt();
+                                const value = e.target.value;
+                                setLocalData(d => ({ ...d, currentProfile: value }));
+                            }}
+                            className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-white text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 outline-none appearance-none pr-8 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition w-32"
+                        >
                             {localData.profiles.map(p => <option key={p} value={p}>{p}</option>)}
                         </select>
                          <div className="absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none text-slate-400 text-xs">▼</div>
                     </div>
                     <div className="relative">
-                        <select value={localData.currentDevice} onChange={e => setLocalData({...localData, currentDevice: e.target.value})} className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-white text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 outline-none appearance-none pr-8 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition w-32">
+                        <select
+                            value={localData.currentDevice}
+                            onChange={e => {
+                                bumpLocalUpdatedAt();
+                                const value = e.target.value;
+                                setLocalData(d => ({ ...d, currentDevice: value }));
+                            }}
+                            className="bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-white text-sm font-bold px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 outline-none appearance-none pr-8 cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition w-32"
+                        >
                              {localData.devices.map(d => <option key={d} value={d}>{d}</option>)}
                         </select>
                          <div className="absolute right-2 top-1/2 transform -translate-y-1/2 pointer-events-none text-slate-400 text-xs">▼</div>
@@ -1767,7 +1799,7 @@ const App: React.FC = () => {
                 <div className="flex flex-wrap sm:flex-nowrap justify-start gap-2 mb-6 bg-slate-100 dark:bg-slate-800 p-2 rounded-xl w-full overflow-x-visible sm:overflow-x-auto whitespace-normal sm:whitespace-nowrap">
                     {(['classic', 'backwards', 'spaces', 'backwards-spaces', 'blank', 'flash', 'guinness'] as GameMode[]).map(m => (
                         <button key={m} onClick={() => resetGame(m)} className={`px-4 py-2 rounded-lg text-[11px] font-bold transition whitespace-nowrap ${settings.mode === m ? 'bg-white dark:bg-slate-700 shadow text-blue-600 dark:text-blue-300 scale-105' : 'text-slate-500 hover:bg-white/50'}`}>
-                             {m.includes('backwards') ? (m.includes('spaces') ? 'Z Y X' : 'Z-A') : m.includes('spaces') ? 'A B C' : <span className="capitalize">{m} {m==='blank' ? 'Typing' : m==='flash' ? 'Flash' : 'Grid' }</span>}
+                             {modeLabel(m)}
                         </button>
                     ))}
                 </div>
@@ -1885,7 +1917,17 @@ const App: React.FC = () => {
                         </label>
                    }
                    <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <input type="checkbox" checked={settings.sound} onChange={e => { bumpLocalUpdatedAt(); setSettings({...settings, sound: e.target.checked}); }} className="accent-blue-500" />
+                        <input
+                            type="checkbox"
+                            checked={settings.sound}
+                            onChange={e => {
+                                const next = e.target.checked;
+                                bumpLocalUpdatedAt();
+                                setSettings(s => ({ ...s, sound: next }));
+                                if (next) void ensureAudioContext();
+                            }}
+                            className="accent-blue-500"
+                        />
                         <span className="font-semibold text-slate-600 dark:text-slate-300">Enable Sound</span>
                     </label>
                    <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">

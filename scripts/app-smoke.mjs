@@ -119,9 +119,31 @@ const assertChecked = async (page, label, desired = true) => {
   assert(val === desired, `${label} expected ${desired ? 'checked' : 'unchecked'}`);
 };
 
-const setModeButton = async (page, name) => {
-  let btn = page.getByRole('button', { name, exact: true });
-  if (!(await btn.count())) btn = page.getByRole('button', { name });
+const modeButtonLabel = (mode) => {
+  switch (mode) {
+    case 'classic':
+      return 'A–Z';
+    case 'backwards':
+      return 'Z–A';
+    case 'spaces':
+      return 'A–Z (spaces)';
+    case 'backwards-spaces':
+      return 'Z–A (spaces)';
+    case 'blank':
+      return 'Blank typing';
+    case 'flash':
+      return 'Flash';
+    case 'guinness':
+      return 'Grid';
+    default:
+      return null;
+  }
+};
+
+const setModeButton = async (page, modeOrLabel) => {
+  const label = modeButtonLabel(modeOrLabel) || modeOrLabel;
+  let btn = page.getByRole('button', { name: label, exact: true });
+  if (!(await btn.count())) btn = page.getByRole('button', { name: label });
   await btn.first().click();
 };
 
