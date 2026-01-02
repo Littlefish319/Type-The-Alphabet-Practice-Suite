@@ -48,6 +48,19 @@ const speak = (text: string, soundEnabled: boolean, voiceEnabled: boolean) => {
 
 const MODE_RECORD_ORDER: GameMode[] = ['classic', 'backwards', 'spaces', 'backwards-spaces'];
 
+const uniqStrings = (arr: string[]): string[] => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const v of arr) {
+        const s = String(v || '').trim();
+        if (!s) continue;
+        if (seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+    }
+    return out;
+};
+
 const modeLabel = (mode: GameMode): string => {
     switch (mode) {
         case 'classic':
@@ -340,6 +353,65 @@ const App: React.FC = () => {
         [settings.mode, specializedPractice]
     );
 
+    const migrateLegacyProfileDeviceNames = useCallback((data: LocalData): LocalData => {
+        // Older builds used "Tony" and "Magic Keyboard" as initial defaults.
+        // Migrate them to neutral defaults so new users can add their own.
+        const PROFILE_RENAME: Record<string, string> = {
+            'Tony': 'User',
+        };
+        const DEVICE_RENAME: Record<string, string> = {
+            'Magic Keyboard': 'This Device',
+        };
+
+        const renameProfile = (name: string) => PROFILE_RENAME[name] || name;
+        const renameDevice = (name: string) => DEVICE_RENAME[name] || name;
+
+        const profiles = uniqStrings((data.profiles || []).map(renameProfile));
+        const devices = uniqStrings((data.devices || []).map(renameDevice));
+
+        const currentProfile = profiles.includes(renameProfile(data.currentProfile))
+            ? renameProfile(data.currentProfile)
+            : (profiles[0] || DEFAULT_LOCAL_DATA.currentProfile);
+
+        const currentDevice = devices.includes(renameDevice(data.currentDevice))
+            ? renameDevice(data.currentDevice)
+            : (devices[0] || DEFAULT_LOCAL_DATA.currentDevice);
+
+        const nextProfileSettings: Record<string, ProfileSettings> = { ...(data.profileSettings || {}) };
+        const oldProfile = 'Tony';
+        const newProfile = 'User';
+        if (nextProfileSettings[oldProfile]) {
+            if (nextProfileSettings[newProfile]) {
+                nextProfileSettings[newProfile] = { ...nextProfileSettings[oldProfile], ...nextProfileSettings[newProfile] };
+            } else {
+                nextProfileSettings[newProfile] = nextProfileSettings[oldProfile];
+            }
+            delete nextProfileSettings[oldProfile];
+        }
+
+        // Ensure the current profile has settings.
+        if (!nextProfileSettings[currentProfile]) {
+            nextProfileSettings[currentProfile] = { tonysRhythm: false, fingering: false };
+        }
+
+        const history = (data.history || []).map((r) => {
+            const nextProfile = renameProfile((r as any).profile);
+            const nextDevice = renameDevice((r as any).device);
+            if (nextProfile === (r as any).profile && nextDevice === (r as any).device) return r;
+            return { ...r, profile: nextProfile, device: nextDevice };
+        });
+
+        return {
+            ...data,
+            profiles: profiles.length ? profiles : DEFAULT_LOCAL_DATA.profiles,
+            devices: devices.length ? devices : DEFAULT_LOCAL_DATA.devices,
+            currentProfile,
+            currentDevice,
+            profileSettings: nextProfileSettings,
+            history,
+        };
+    }, []);
+
     // --- DATA & SETTINGS PERSISTENCE ---
     useEffect(() => {
         try {
@@ -374,13 +446,14 @@ const App: React.FC = () => {
                     if (typeof parsed.localData.selectedRhythmPatternId === 'undefined') parsed.localData.selectedRhythmPatternId = null;
                 }
 
-                setLocalData(parsed.localData || DEFAULT_LOCAL_DATA);
+                const migratedLocalData = parsed.localData ? migrateLegacyProfileDeviceNames(parsed.localData) : DEFAULT_LOCAL_DATA;
+                setLocalData(migratedLocalData);
                 setSettings(parsed.settings || DEFAULT_SETTINGS);
             }
         } catch (e) {
             console.error("Failed to load data from localStorage", e);
         }
-    }, []);
+    }, [migrateLegacyProfileDeviceNames]);
 
     useEffect(() => {
         try {
@@ -441,10 +514,11 @@ const App: React.FC = () => {
     const applyCloudEnvelope = useCallback((env: CloudEnvelope) => {
         applyingRemoteRef.current = true;
         localUpdatedAtRef.current = env.updatedAt;
-        setLocalData({
+        const migratedLocalData = migrateLegacyProfileDeviceNames({
             ...env.localData,
             history: ensureRunIds(env.localData.history || []),
         });
+        setLocalData(migratedLocalData);
         setSettings(env.settings);
 
         if (typeof env.ui?.professionalMode === 'boolean') {
@@ -454,7 +528,7 @@ const App: React.FC = () => {
         window.setTimeout(() => {
             applyingRemoteRef.current = false;
         }, 0);
-    }, []);
+    }, [migrateLegacyProfileDeviceNames]);
 
     const pushNow = useCallback(async (reason: string) => {
         if (!firebaseEnabled || !user) return;
