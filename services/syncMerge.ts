@@ -175,7 +175,9 @@ export const mergeEnvelopes = <T extends { updatedAt: number; localData: LocalDa
     const didMerge = primaryHash !== mergedHash;
 
     const baseUpdatedAt = Math.max(local.updatedAt || 0, cloud.updatedAt || 0);
-    const updatedAt = didMerge ? Date.now() : baseUpdatedAt;
+    // IMPORTANT: Use a monotonic counter rather than Date.now() to avoid device clock skew
+    // causing settings/UI to "flip back" when multiple devices are syncing.
+    const updatedAt = didMerge ? baseUpdatedAt + 1 : baseUpdatedAt;
 
     return { updatedAt, localData: mergedLocalData, settings: mergedSettings, ui: mergedUi, didMerge };
 };

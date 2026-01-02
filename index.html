@@ -37,10 +37,16 @@
         }
     </script>
     <style>
-        html, body { height: 100%; }
+        html, body { height: 100%; min-height: 100%; }
         #root { height: 100%; width: 100%; }
         body { margin: 0; }
         body { transition: background-color 0.3s, color 0.3s; }
+
+        /* Ensure iOS safe-area / overscroll never reveals white. */
+        html { background: #f8fafc; }
+        @media (prefers-color-scheme: dark) {
+            html { background: #020617; }
+        }
 
         /* Safe-area helpers (iOS notch) */
         .safe-shell {

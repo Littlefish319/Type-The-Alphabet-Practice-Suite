@@ -35,13 +35,13 @@ const DEFAULT_PROFILE_SETTINGS: ProfileSettings = {
 };
 
 export const DEFAULT_LOCAL_DATA: LocalData = {
-    profiles: ["Tony"],
-    devices: ["Magic Keyboard", "Window Keyboard", "Touchscreen"],
-    currentProfile: "Tony",
-    currentDevice: "Magic Keyboard",
+    profiles: ["User"],
+    devices: ["This Device"],
+    currentProfile: "User",
+    currentDevice: "This Device",
     history: [],
     profileSettings: {
-        "Tony": DEFAULT_PROFILE_SETTINGS
+        "User": DEFAULT_PROFILE_SETTINGS
     },
     fingerPatterns: [],
     selectedFingerPatternId: null,

@@ -1,11 +1,13 @@
 import { Capacitor } from '@capacitor/core';
 import {
+    browserLocalPersistence,
     GoogleAuthProvider,
     OAuthProvider,
     createUserWithEmailAndPassword,
     deleteUser,
     getRedirectResult,
     onAuthStateChanged,
+    setPersistence,
     sendPasswordResetEmail,
     signInWithEmailAndPassword,
     signInWithPopup,
@@ -15,9 +17,19 @@ import {
 } from 'firebase/auth';
 import { getAuthIfConfigured } from './firebase';
 
+let persistenceReady = false;
+
 const requireAuth = () => {
     const a = getAuthIfConfigured();
     if (!a) throw new Error('Firebase is not configured.');
+
+    if (!persistenceReady) {
+        persistenceReady = true;
+        // Best-effort: Safari/embedded contexts can reject; auth still works.
+        void setPersistence(a, browserLocalPersistence).catch(() => {
+            // ignore
+        });
+    }
     return a;
 };
 

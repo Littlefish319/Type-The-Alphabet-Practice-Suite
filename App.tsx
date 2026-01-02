@@ -148,6 +148,8 @@ const App: React.FC = () => {
         }
     });
 
+    const professionalModeDirtyRef = useRef(false);
+
     const professionalModeRef = useRef<boolean>(professionalMode);
     useEffect(() => {
         professionalModeRef.current = professionalMode;
@@ -156,6 +158,26 @@ const App: React.FC = () => {
     useEffect(() => {
         try {
             localStorage.setItem(PROFESSIONAL_MODE_STORAGE_KEY, professionalMode ? '1' : '0');
+        } catch {
+            // ignore
+        }
+    }, [professionalMode]);
+
+    useEffect(() => {
+        if (!professionalModeDirtyRef.current) return;
+        professionalModeDirtyRef.current = false;
+
+        const now = Math.max(Date.now(), (localUpdatedAtRef.current || 0) + 1);
+        localUpdatedAtRef.current = now;
+
+        // Persist updatedAt so a reload doesn't let cloud overwrite this UI change.
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                parsed.meta = { ...(parsed.meta || {}), updatedAt: now };
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+            }
         } catch {
             // ignore
         }
@@ -225,6 +247,7 @@ const App: React.FC = () => {
     const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
 
     const localUpdatedAtRef = useRef<number>(0);
+    const lastUiChangeAtRef = useRef<number>(0);
     const applyingRemoteRef = useRef<boolean>(false);
     const pushTimerRef = useRef<number | null>(null);
     const localDataRef = useRef<LocalData>(localData);
@@ -232,6 +255,13 @@ const App: React.FC = () => {
 
     useEffect(() => { localDataRef.current = localData; }, [localData]);
     useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+    const bumpLocalUpdatedAt = useCallback(() => {
+        if (applyingRemoteRef.current) return;
+        const next = Math.max(Date.now(), (localUpdatedAtRef.current || 0) + 1);
+        localUpdatedAtRef.current = next;
+        lastUiChangeAtRef.current = Date.now();
+    }, []);
 
     const isAiAvailable = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
 
@@ -344,7 +374,7 @@ const App: React.FC = () => {
     useEffect(() => {
         try {
             if (!applyingRemoteRef.current) {
-                localUpdatedAtRef.current = Date.now();
+                localUpdatedAtRef.current = Math.max(Date.now(), (localUpdatedAtRef.current || 0) + 1);
             }
 
             const dataToStore = {
@@ -1195,6 +1225,7 @@ const App: React.FC = () => {
     };
 
     const handleProfileSettingChange = (key: keyof ProfileSettings, value: boolean) => {
+        bumpLocalUpdatedAt();
         setLocalData(d => {
             const newProfileSettings = {
                 ...(d.profileSettings || {}),
@@ -1578,8 +1609,8 @@ const App: React.FC = () => {
         <div
             className={
                 professionalMode
-                    ? 'relative w-full max-w-6xl bg-white/80 dark:bg-slate-900/70 shadow-2xl rounded-3xl p-4 sm:p-6 md:p-8 mt-4 mb-4 border border-slate-200/70 dark:border-slate-800/80 ring-1 ring-slate-200/60 dark:ring-slate-700/60 backdrop-blur-xl'
-                    : 'w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-2xl p-4 sm:p-6 md:p-8 mt-4 mb-4 border border-slate-200 dark:border-slate-800'
+                    ? 'relative w-full max-w-6xl bg-white/80 dark:bg-slate-900/70 shadow-2xl rounded-none sm:rounded-3xl p-4 sm:p-6 md:p-8 mt-0 mb-0 sm:mt-4 sm:mb-4 border border-slate-200/70 dark:border-slate-800/80 ring-1 ring-slate-200/60 dark:ring-slate-700/60 backdrop-blur-xl'
+                    : 'w-full max-w-6xl bg-white dark:bg-slate-900 shadow-2xl rounded-none sm:rounded-2xl p-4 sm:p-6 md:p-8 mt-0 mb-0 sm:mt-4 sm:mb-4 border border-slate-200 dark:border-slate-800'
             }
         >
             {/* Header */}
@@ -1612,7 +1643,11 @@ const App: React.FC = () => {
                             type="button"
                             role="switch"
                             aria-checked={professionalMode}
-                            onClick={() => setProfessionalMode(v => !v)}
+                            onClick={() => {
+                                professionalModeDirtyRef.current = true;
+                                localUpdatedAtRef.current = Math.max(Date.now(), (localUpdatedAtRef.current || 0) + 1);
+                                setProfessionalMode(v => !v);
+                            }}
                             className={
                                 'relative inline-flex h-6 w-11 items-center rounded-full transition ' +
                                 (professionalMode ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700')
@@ -1653,7 +1688,7 @@ const App: React.FC = () => {
                 }
             >
                 <button
-                    onClick={() => setView('practice')}
+                    onClick={() => { bumpLocalUpdatedAt(); setView('practice'); }}
                     className={
                         professionalMode
                             ? (view === 'practice'
@@ -1665,7 +1700,7 @@ const App: React.FC = () => {
                     Practice & Record
                 </button>
                 <button
-                    onClick={() => setView('fingerPatterns')}
+                    onClick={() => { bumpLocalUpdatedAt(); setView('fingerPatterns'); }}
                     className={
                         professionalMode
                             ? (view === 'fingerPatterns'
@@ -1677,7 +1712,7 @@ const App: React.FC = () => {
                     Finger Pattern Practice
                 </button>
                 <button
-                    onClick={() => setView('analytics')}
+                    onClick={() => { bumpLocalUpdatedAt(); setView('analytics'); }}
                     className={
                         professionalMode
                             ? (view === 'analytics'
@@ -1689,7 +1724,7 @@ const App: React.FC = () => {
                     Analytics & Coach
                 </button>
                 <button
-                    onClick={() => setView('history')}
+                    onClick={() => { bumpLocalUpdatedAt(); setView('history'); }}
                     className={
                         professionalMode
                             ? (view === 'history'
@@ -1701,7 +1736,7 @@ const App: React.FC = () => {
                     Run History
                 </button>
                 <button
-                    onClick={() => setView('about')}
+                    onClick={() => { bumpLocalUpdatedAt(); setView('about'); }}
                     className={
                         professionalMode
                             ? (view === 'about'
@@ -1713,7 +1748,7 @@ const App: React.FC = () => {
                     About
                 </button>
                 <button
-                    onClick={() => setView('account')}
+                    onClick={() => { bumpLocalUpdatedAt(); setView('account'); }}
                     className={
                         professionalMode
                             ? (view === 'account'
@@ -1785,6 +1820,7 @@ const App: React.FC = () => {
                             type="checkbox"
                             checked={specializedPractice.enabled}
                             onChange={(e) => {
+                                bumpLocalUpdatedAt();
                                 const enabled = e.target.checked;
                                 setSettings(s => ({
                                     ...s,
@@ -1806,6 +1842,7 @@ const App: React.FC = () => {
                             <select
                                 value={specializedPractice.start.toLowerCase()}
                                 onChange={(e) => {
+                                    bumpLocalUpdatedAt();
                                     const start = e.target.value;
                                     setSettings(s => ({
                                         ...s,
@@ -1824,6 +1861,7 @@ const App: React.FC = () => {
                             <select
                                 value={specializedPractice.end.toLowerCase()}
                                 onChange={(e) => {
+                                    bumpLocalUpdatedAt();
                                     const end = e.target.value;
                                     setSettings(s => ({
                                         ...s,
@@ -1842,16 +1880,16 @@ const App: React.FC = () => {
                     )}
                    {settings.mode !== 'blank' &&
                         <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
-                            <input type="checkbox" checked={settings.blind} onChange={e => setSettings({...settings, blind: e.target.checked})} className="accent-blue-500" />
+                            <input type="checkbox" checked={settings.blind} onChange={e => { bumpLocalUpdatedAt(); setSettings({...settings, blind: e.target.checked}); }} className="accent-blue-500" />
                             <span className="font-semibold text-slate-600 dark:text-slate-300">Blind Mode</span>
                         </label>
                    }
                    <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <input type="checkbox" checked={settings.sound} onChange={e => setSettings({...settings, sound: e.target.checked})} className="accent-blue-500" />
+                        <input type="checkbox" checked={settings.sound} onChange={e => { bumpLocalUpdatedAt(); setSettings({...settings, sound: e.target.checked}); }} className="accent-blue-500" />
                         <span className="font-semibold text-slate-600 dark:text-slate-300">Enable Sound</span>
                     </label>
                    <label className="flex items-center gap-2 cursor-pointer bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
-                        <input type="checkbox" checked={settings.voice} onChange={e => setSettings({...settings, voice: e.target.checked})} className="accent-blue-500" />
+                        <input type="checkbox" checked={settings.voice} onChange={e => { bumpLocalUpdatedAt(); setSettings({...settings, voice: e.target.checked}); }} className="accent-blue-500" />
                         <span className="font-semibold text-slate-600 dark:text-slate-300">Voice Announce</span>
                     </label>
                 </div>
@@ -1891,15 +1929,33 @@ const App: React.FC = () => {
 
                 <div
                     className={`relative min-h-[320px] sm:min-h-[350px] flex flex-col items-center justify-center bg-slate-100 dark:bg-slate-800/50 rounded-2xl p-4 sm:p-8 overflow-hidden transition-all duration-300 ${isError ? 'animate-shake' : ''} ${settings.mode === 'guinness' && gameState.started && !gameState.finished ? 'border-2 border-red-500 shadow-lg shadow-red-500/10' : 'border border-slate-200 dark:border-slate-800'}`}
+                    style={{ touchAction: 'manipulation' }}
                     onPointerDown={() => {
-                        if (!gameState.finished) requestKeyboard();
+                        if (!gameState.finished) {
+                            requestKeyboard();
+                            setTimeout(requestKeyboard, 0);
+                        }
+                        ensureAudioContext();
+                    }}
+                    onTouchStart={() => {
+                        if (!gameState.finished) {
+                            requestKeyboard();
+                            setTimeout(requestKeyboard, 0);
+                        }
+                        ensureAudioContext();
+                    }}
+                    onClick={() => {
+                        if (!gameState.finished) {
+                            requestKeyboard();
+                            setTimeout(requestKeyboard, 0);
+                        }
                         ensureAudioContext();
                     }}
                 >
                     {settings.mode !== 'blank' && (
                         <textarea
                             ref={hiddenInputRef}
-                            className="absolute left-0 top-0 w-[1px] h-[1px] opacity-0"
+                            className="absolute inset-0 w-full h-full opacity-0 text-transparent caret-transparent"
                             inputMode="text"
                             autoCorrect="off"
                             autoCapitalize="off"
@@ -1923,7 +1979,26 @@ const App: React.FC = () => {
 
                     <div className={`w-full flex justify-center items-center transition-all ${settings.blind && settings.mode !== 'blank' ? 'blind-mode' : ''}`}>
                        {settings.mode === 'flash' && <div id="flash-letter" className="text-slate-800 dark:text-white transition-colors duration-100">{targetSequence[gameState.index]?.toUpperCase() || 'A'}</div>}
-                       {settings.mode === 'blank' && <textarea ref={blankInputRef} value={targetSequence.slice(0, gameState.index).join('')} onChange={handleBlankInputChange} className="w-full h-full p-4 text-2xl font-mono resize-none rounded-lg bg-slate-50 dark:bg-slate-850 text-slate-800 dark:text-white border-2 border-slate-300 dark:border-slate-700 focus:border-blue-500 outline-none" autoCorrect="off" autoCapitalize="off" autoComplete="off" spellCheck="false" rows={5} placeholder="Start typing sequence..." />}
+                       {settings.mode === 'blank' && (
+                        <textarea
+                            ref={blankInputRef}
+                            value={targetSequence.slice(0, gameState.index).join('')}
+                            onChange={handleBlankInputChange}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    resetGame();
+                                }
+                            }}
+                            className="w-full h-full p-4 text-2xl font-mono resize-none rounded-lg bg-slate-50 dark:bg-slate-850 text-slate-800 dark:text-white border-2 border-slate-300 dark:border-slate-700 focus:border-blue-500 outline-none"
+                            autoCorrect="off"
+                            autoCapitalize="off"
+                            autoComplete="off"
+                            spellCheck={false}
+                            rows={5}
+                            placeholder="Start typing sequence..."
+                        />
+                       )}
                        {['classic', 'guinness', 'backwards', 'spaces', 'backwards-spaces'].includes(settings.mode) && (
                             <>
                                 {currentProfileSettings.tonysRhythm && ['classic', 'guinness'].includes(settings.mode) ? (

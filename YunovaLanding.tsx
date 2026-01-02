@@ -35,15 +35,45 @@ export default function YunovaLanding() {
               <svg width="26" height="26" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <defs>
                   <linearGradient id="yunova-g" x1="10" y1="8" x2="58" y2="56" gradientUnits="userSpaceOnUse">
-                    <stop stopColor="#60A5FA" />
-                    <stop offset="0.55" stopColor="#22D3EE" />
-                    <stop offset="1" stopColor="#818CF8" />
+                    <stop stopColor="#2563EB" />
+                    <stop offset="0.55" stopColor="#06B6D4" />
+                    <stop offset="1" stopColor="#6366F1" />
                   </linearGradient>
                 </defs>
-                <path
-                  d="M14 12h10l8 14 8-14h10L38 36v16h-12V36L14 12z"
-                  fill="url(#yunova-g)"
-                />
+                <g transform="skewX(-12) translate(6 0)">
+                  <path
+                    d="M12 14 L22 30 L32 14"
+                    stroke="url(#yunova-g)"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M22 30 L22 50"
+                    stroke="url(#yunova-g)"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+
+                  {/* Connected slash from Y into N */}
+                  <path
+                    d="M22 30 L40 18"
+                    stroke="url(#yunova-g)"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+
+                  {/* N */}
+                  <path
+                    d="M40 50 L40 18 L52 50 L52 18"
+                    stroke="url(#yunova-g)"
+                    strokeWidth="6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </g>
               </svg>
             </div>
             <div>

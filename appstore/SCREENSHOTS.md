@@ -1,34 +1,45 @@
 # AlphaTyper — Screenshot Checklist
 
-Take screenshots **in the iOS Simulator** (best quality) once TestFlight/App Store Connect is ready.
+We now auto-generate App Store–style screenshots + an App Preview video.
 
-## Screens to capture (recommended)
-- Practice (tabs visible + main practice area)
-- Analytics & Coach (analytics section visible)
-- Run History (table visible)
-- Account (showing Login & Cloud Sync and/or Signed in status)
+## Final assets (use these)
+- **iPad 12.9 landscape screenshots (ship these):** `appstore/final/screenshots/ipad-12.9-landscape/`
+- **iPad 12.9 portrait screenshots (backup):** `appstore/final/screenshots/ipad-12.9/`
+- **iPhone 6.7 screenshots (ship these):** `appstore/final/screenshots/iphone-6.7/`
+- **iPhone 6.1 screenshots (optional fallback):** `appstore/final/screenshots/iphone-6.1/`
+- **App Preview videos (MP4):**
+	- iPad: `appstore/final/videos/ipad-12.9-landscape/app-preview.mp4`
+	- iPhone 6.7: `appstore/final/videos/iphone-6.7/app-preview.mp4`
 
-## Device sizes to plan for
-Apple may require screenshots for specific display sizes depending on your supported devices.
+To regenerate the final export:
+```zsh
+EXPORT_FINAL=1 EXPORT_MP4=1 npm run screenshots
+```
 
-Recommended targets:
-- iPhone 6.7" (e.g., iPhone 15 Pro Max)
-- iPhone 6.1" (e.g., iPhone 15 Pro)
+## How many screenshots to upload?
+- Apple allows **up to 10** per device size.
+- Recommended: **6–8** (strong story, no filler).
+- You can upload all 10 now, then delete the weaker ones later.
 
-If you ship iPad:
-- iPad 12.9" (or 13")
+Current iPad landscape options (pick your favorites):
+- `01-practice-fingering.png`
+- `02-time-results.png`
+- `03-analytics-splits.png`
+- `04-customize-patterns.png`
+- `05-modes-backwards-spaces.png`
+- `06-specialized-practice.png`
+- `07-blind-mode.png`
+- `08-rhythm-pattern.png`
+- `09-run-history.png`
+- `10-challenge-grid.png`
 
-## Simulator tips
-- Use Light Mode screenshots unless you plan to include both.
-- Hide the keyboard unless you specifically want to show typing.
-- Make sure the app is not clipped (safe-area) and tabs are readable.
+## Device sizes
+- iPad: we’re generating **iPad 12.9"** right now.
+- iPhone: we’re generating **6.7\"** (primary) and **6.1\"** (optional fallback).
 
-## Where to save
-Create a local folder:
-- `appstore/screenshots/`
+## Notes
+- Keep one orientation per device size (we’re shipping **landscape** for iPad).
+- VS Code may not preview WebM; use the MP4 in `appstore/final/videos/...`.
 
-Name files like:
-- `iphone-6.1-practice.png`
-- `iphone-6.1-analytics.png`
-- `iphone-6.1-history.png`
-- `iphone-6.1-account.png`
+## Legacy option
+If you prefer manual Simulator screenshots later, this doc can be extended again — but the automated set should be good enough to ship.
