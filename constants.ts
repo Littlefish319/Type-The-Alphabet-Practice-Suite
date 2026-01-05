@@ -47,6 +47,10 @@ export const DEFAULT_LOCAL_DATA: LocalData = {
     selectedFingerPatternId: null,
     rhythmPatterns: [],
     selectedRhythmPatternId: null,
+    clickSpeed: {
+        bestByDurationMs: {},
+        recent: [],
+    },
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +59,11 @@ export const DEFAULT_SETTINGS: Settings = {
     voice: false,
     sound: true,
     worldRecords: {},
+    worldRecordLinks: {},
+    leaderboard: {
+        enabled: false,
+        displayName: 'User',
+    },
     specializedPractice: {
         enabled: false,
         start: 'a',

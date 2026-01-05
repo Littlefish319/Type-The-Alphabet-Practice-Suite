@@ -10,6 +10,7 @@ import {
     setPersistence,
     sendPasswordResetEmail,
     signInWithEmailAndPassword,
+    signInAnonymously,
     signInWithPopup,
     signInWithRedirect,
     signOut,
@@ -68,6 +69,13 @@ export const signUpWithEmail = async (email: string, password: string): Promise<
 
 export const signInWithEmail = async (email: string, password: string): Promise<User> => {
     const cred = await signInWithEmailAndPassword(requireAuth(), email, password);
+    return cred.user;
+};
+
+export const signInAnonymouslyIfNeeded = async (): Promise<User> => {
+    const auth = requireAuth();
+    if (auth.currentUser) return auth.currentUser;
+    const cred = await signInAnonymously(auth);
     return cred.user;
 };
 

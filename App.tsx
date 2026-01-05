@@ -12,6 +12,7 @@ import { getDeviceIdentity, type DeviceIdentity } from './services/deviceIdentit
 
 const loadAuthService = () => import('./services/authService');
 const loadCloudSync = () => import('./services/cloudSync');
+const loadLeaderboard = () => import('./services/leaderboard');
 
 // --- AUDIO UTILS ---
 let synth: any = null;
@@ -495,6 +496,18 @@ const App: React.FC = () => {
                     parsed.settings.worldRecords = {};
                 }
 
+                if (parsed.settings && !parsed.settings.worldRecordLinks) {
+                    parsed.settings.worldRecordLinks = {};
+                }
+
+                if (parsed.settings && !parsed.settings.leaderboard) {
+                    parsed.settings.leaderboard = DEFAULT_SETTINGS.leaderboard;
+                }
+
+                if (parsed.localData && !parsed.localData.clickSpeed) {
+                    parsed.localData.clickSpeed = { bestByDurationMs: {}, recent: [] };
+                }
+
                 if (parsed.settings && !parsed.settings.specializedPractice) {
                     parsed.settings.specializedPractice = DEFAULT_SETTINGS.specializedPractice;
                 }
@@ -508,7 +521,7 @@ const App: React.FC = () => {
 
                 const migratedLocalData = parsed.localData ? migrateLegacyProfileDeviceNames(parsed.localData) : DEFAULT_LOCAL_DATA;
                 setLocalData(migratedLocalData);
-                setSettings(parsed.settings || DEFAULT_SETTINGS);
+                setSettings({ ...DEFAULT_SETTINGS, ...(parsed.settings || {}) });
             }
         } catch (e) {
             console.error("Failed to load data from localStorage", e);
@@ -593,11 +606,18 @@ const App: React.FC = () => {
             ...env.localData,
             history: ensureRunIds(env.localData.history || []),
         });
-        setLocalData(migratedLocalData);
+        const nextLocalData: LocalData = {
+            ...DEFAULT_LOCAL_DATA,
+            ...migratedLocalData,
+            clickSpeed: migratedLocalData.clickSpeed ?? { bestByDurationMs: {}, recent: [] },
+        };
+        setLocalData(nextLocalData);
         const nextSettings: Settings = {
             ...DEFAULT_SETTINGS,
             ...env.settings,
             worldRecords: env.settings?.worldRecords ?? {},
+            worldRecordLinks: env.settings?.worldRecordLinks ?? {},
+            leaderboard: env.settings?.leaderboard ?? DEFAULT_SETTINGS.leaderboard,
         };
         setSettings(nextSettings);
 
@@ -1019,64 +1039,189 @@ const App: React.FC = () => {
         blurTypingInputs();
         
         setResultsModalOpen(true);
-    }, [blurTypingInputs, burstConfetti, deviceIdentity?.deviceId, deviceIdentity?.deviceLabel, deviceIdentity?.platform, gameState.mistakeLog, gameState.mistakes, generatePostRunAnalysis, localData.currentDevice, localData.currentProfile, localData.history, settings.blind, settings.mode, settings.sound, settings.voice, settings.worldRecords, specializedPractice]);
 
-    // --- ABOUT: CLICK SPEED TEST ---
-    const [clickTestActive, setClickTestActive] = useState(false);
+        // Optional: publish best times to global leaderboard.
+        if (!specializedPractice?.enabled && settings.leaderboard?.enabled) {
+            void (async () => {
+                try {
+                    if (!firebaseEnabled) return;
+                    const { signInAnonymouslyIfNeeded } = await loadAuthService();
+                    const u = user || (await signInAnonymouslyIfNeeded());
+                    if (!u?.uid) return;
+
+                    const { upsertLeaderboardBestTime } = await loadLeaderboard();
+                    const displayName = String(settings.leaderboard?.displayName || 'User').trim() || 'User';
+                    await upsertLeaderboardBestTime({
+                        uid: u.uid,
+                        mode: newRun.mode,
+                        bestTime: finalTime,
+                        displayName,
+                    });
+                } catch {
+                    // ignore leaderboard failures
+                }
+            })();
+        }
+    }, [blurTypingInputs, burstConfetti, deviceIdentity?.deviceId, deviceIdentity?.deviceLabel, deviceIdentity?.platform, firebaseEnabled, gameState.mistakeLog, gameState.mistakes, generatePostRunAnalysis, localData.currentDevice, localData.currentProfile, localData.history, settings.blind, settings.leaderboard?.displayName, settings.leaderboard?.enabled, settings.mode, settings.sound, settings.voice, settings.worldRecords, specializedPractice, user]);
+
+    // --- RANKINGS ---
+    const [rankingsMode, setRankingsMode] = useState<GameMode>('classic');
+    const [rankingsLoading, setRankingsLoading] = useState(false);
+    const [rankingsError, setRankingsError] = useState<string | null>(null);
+    const [rankingsTop, setRankingsTop] = useState<Array<{ uid: string; displayName: string; bestTime: number }>>([]);
+
+    const refreshRankings = useCallback(async () => {
+        if (!firebaseEnabled) return;
+        setRankingsLoading(true);
+        setRankingsError(null);
+        try {
+            const { fetchLeaderboardTop } = await loadLeaderboard();
+            const top = await fetchLeaderboardTop({ mode: rankingsMode, n: 50 });
+            setRankingsTop(top.map((t) => ({ uid: t.uid, displayName: t.displayName, bestTime: t.bestTime })));
+        } catch (e: any) {
+            setRankingsError(e?.message || String(e));
+        } finally {
+            setRankingsLoading(false);
+        }
+    }, [firebaseEnabled, rankingsMode]);
+
+    const BADGE_MODES: GameMode[] = useMemo(() => ['classic', 'backwards', 'spaces', 'backwards-spaces', 'guinness'], []);
+    const [badgeRanks, setBadgeRanks] = useState<Partial<Record<GameMode, number>>>({});
+
+    const refreshBadges = useCallback(async () => {
+        if (!firebaseEnabled) return;
+        if (!user?.uid) return;
+        if (!settings.leaderboard?.enabled) return;
+
+        try {
+            const { fetchLeaderboardTop } = await loadLeaderboard();
+            const next: Partial<Record<GameMode, number>> = {};
+            for (const m of BADGE_MODES) {
+                const top = await fetchLeaderboardTop({ mode: m, n: 100 });
+                const idx = top.findIndex((t) => t.uid === user.uid);
+                if (idx >= 0) next[m] = idx + 1;
+            }
+            setBadgeRanks(next);
+        } catch {
+            // ignore
+        }
+    }, [BADGE_MODES, firebaseEnabled, settings.leaderboard?.enabled, user?.uid]);
+
+    useEffect(() => {
+        if (view !== 'account') return;
+        void refreshBadges();
+    }, [refreshBadges, view]);
+
+    useEffect(() => {
+        if (view !== 'rankings') return;
+        if (!firebaseEnabled) return;
+        void refreshRankings();
+    }, [firebaseEnabled, refreshRankings, view]);
+
+    // --- CLICK SPEED TEST ---
+    const [clickDurationMs, setClickDurationMs] = useState<number>(10_000);
+    const [clickPhase, setClickPhase] = useState<'idle' | 'countdown' | 'running' | 'done'>('idle');
+    const [clickCountdown, setClickCountdown] = useState<number>(3);
     const [clickTestStartedAt, setClickTestStartedAt] = useState<number | null>(null);
     const [clickTestEndsAt, setClickTestEndsAt] = useState<number | null>(null);
     const [clickTestCount, setClickTestCount] = useState(0);
     const [clickTestNow, setClickTestNow] = useState(Date.now());
+    const [clickLastCps, setClickLastCps] = useState<number | null>(null);
 
-    const CLICK_TEST_MS = 10_000;
+    const finalizeClickTest = useCallback((reason: 'ended' | 'stopped') => {
+        setClickPhase('done');
+        const startedAt = clickTestStartedAt;
+        if (!startedAt) {
+            setClickLastCps(0);
+            return;
+        }
+        const endedAt = Math.min(Date.now(), clickTestEndsAt || Date.now());
+        const elapsedSec = Math.max(0.001, (endedAt - startedAt) / 1000);
+        const cps = clickTestCount / elapsedSec;
+        setClickLastCps(cps);
+
+        setLocalData((d) => {
+            const prev = d.clickSpeed || { bestByDurationMs: {}, recent: [] };
+            const key = String(clickDurationMs);
+            const best = Number(prev.bestByDurationMs[key] || 0);
+            const nextBest = Math.max(best, cps);
+            const nextRecent = [{ durationMs: clickDurationMs, count: clickTestCount, cps, timestamp: Date.now() }, ...(prev.recent || [])].slice(0, 30);
+            return {
+                ...d,
+                clickSpeed: {
+                    bestByDurationMs: { ...(prev.bestByDurationMs || {}), [key]: nextBest },
+                    recent: nextRecent,
+                },
+            };
+        });
+
+        if (reason === 'ended') playSound('win', settings.sound);
+    }, [clickDurationMs, clickTestCount, clickTestEndsAt, clickTestStartedAt, settings.sound]);
 
     const startClickTest = useCallback(() => {
-        const now = Date.now();
         setClickTestCount(0);
-        setClickTestStartedAt(now);
-        setClickTestEndsAt(now + CLICK_TEST_MS);
-        setClickTestActive(true);
+        setClickLastCps(null);
+        setClickCountdown(3);
+        setClickPhase('countdown');
     }, []);
 
     const stopClickTest = useCallback(() => {
-        setClickTestActive(false);
-    }, []);
+        if (clickPhase === 'running') finalizeClickTest('stopped');
+        else setClickPhase('idle');
+    }, [clickPhase, finalizeClickTest]);
 
     useEffect(() => {
-        if (!clickTestActive) return;
-
-        const onHit = () => {
-            const now = Date.now();
-            if (clickTestEndsAt && now >= clickTestEndsAt) {
-                setClickTestActive(false);
-                return;
+        if (view !== 'clickSpeed') {
+            if (clickPhase === 'running' || clickPhase === 'countdown') {
+                setClickPhase('idle');
             }
+            return;
+        }
+
+        if (clickPhase !== 'countdown') return;
+        const t = window.setInterval(() => {
+            setClickCountdown((c) => {
+                const next = c - 1;
+                if (next <= 0) {
+                    window.clearInterval(t);
+                    const now = Date.now();
+                    setClickTestStartedAt(now);
+                    setClickTestEndsAt(now + clickDurationMs);
+                    setClickPhase('running');
+                    playSound('count', settings.sound);
+                    return 0;
+                }
+                playSound('count', settings.sound);
+                return next;
+            });
+        }, 1000);
+        return () => window.clearInterval(t);
+    }, [clickDurationMs, clickPhase, settings.sound, view]);
+
+    useEffect(() => {
+        if (view !== 'clickSpeed') return;
+        if (clickPhase !== 'running') return;
+
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.repeat) return;
             setClickTestCount((c) => c + 1);
         };
-
-        const onPointerDown = () => onHit();
-        const onKeyDown = (e: KeyboardEvent) => {
-            // Count any key.
-            if (e.repeat) return;
-            onHit();
-        };
-
-        window.addEventListener('pointerdown', onPointerDown, { passive: true });
         window.addEventListener('keydown', onKeyDown);
 
         const t = window.setInterval(() => {
-            setClickTestNow(Date.now());
-            if (clickTestEndsAt && Date.now() >= clickTestEndsAt) {
-                setClickTestActive(false);
+            const now = Date.now();
+            setClickTestNow(now);
+            if (clickTestEndsAt && now >= clickTestEndsAt) {
+                window.clearInterval(t);
+                finalizeClickTest('ended');
             }
         }, 50);
 
         return () => {
-            window.removeEventListener('pointerdown', onPointerDown as any);
             window.removeEventListener('keydown', onKeyDown as any);
             window.clearInterval(t);
         };
-    }, [clickTestActive, clickTestEndsAt]);
+    }, [clickPhase, clickTestEndsAt, finalizeClickTest, view]);
 
     const clickTestElapsedSec = clickTestStartedAt ? Math.max(0, (Math.min(clickTestNow, clickTestEndsAt || clickTestNow) - clickTestStartedAt) / 1000) : 0;
     const clickTestRemainingSec = clickTestEndsAt ? Math.max(0, (clickTestEndsAt - clickTestNow) / 1000) : 0;
@@ -1974,6 +2119,30 @@ const App: React.FC = () => {
                     Practice & Record
                 </button>
                 <button
+                    onClick={() => { bumpLocalUpdatedAt(); setView('clickSpeed'); }}
+                    className={
+                        professionalMode
+                            ? (view === 'clickSpeed'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'clickSpeed' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Click Speed
+                </button>
+                <button
+                    onClick={() => { bumpLocalUpdatedAt(); setView('rankings'); }}
+                    className={
+                        professionalMode
+                            ? (view === 'rankings'
+                                ? 'px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white shadow-sm'
+                                : 'px-4 py-2 rounded-xl text-slate-600 dark:text-slate-300 hover:bg-slate-100/70 dark:hover:bg-slate-800/60 transition')
+                            : (view === 'rankings' ? 'active-tab pb-2' : 'inactive-tab pb-2 hover:text-blue-500 transition')
+                    }
+                >
+                    Rankings
+                </button>
+                <button
                     onClick={() => { bumpLocalUpdatedAt(); setView('fingerPatterns'); }}
                     className={
                         professionalMode
@@ -2397,6 +2566,326 @@ const App: React.FC = () => {
                     )}
                 </div>
 
+            </div>
+
+            <div className={view !== 'clickSpeed' ? 'hidden' : ''}>
+                {/* CLICK SPEED VIEW */}
+                <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 md:p-8">
+                    <div className="max-w-3xl">
+                        <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Performance Lab</div>
+                        <h2 className="text-2xl md:text-3xl font-black tracking-tight text-slate-900 dark:text-white mt-1">Click Speed Test</h2>
+                        <div className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+                            Measure your raw clicks/keys per second. Click/tap the pad, or press keys during the run.
+                        </div>
+                    </div>
+
+                    <div className="mt-6 flex flex-wrap items-center gap-2">
+                        {[5_000, 10_000, 30_000].map((ms) => (
+                            <button
+                                key={ms}
+                                onClick={() => { if (clickPhase === 'idle' || clickPhase === 'done') setClickDurationMs(ms); }}
+                                className={`px-4 py-2 rounded-lg text-xs font-bold border transition ${clickDurationMs === ms ? 'bg-blue-600 text-white border-blue-700' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                            >
+                                {ms / 1000}s
+                            </button>
+                        ))}
+
+                        <div className="flex-1" />
+                        {clickPhase === 'idle' || clickPhase === 'done' ? (
+                            <button
+                                onClick={startClickTest}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700"
+                            >
+                                Start
+                            </button>
+                        ) : (
+                            <button
+                                onClick={stopClickTest}
+                                className="bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 px-4 py-2 rounded-lg text-sm font-bold hover:bg-slate-300 dark:hover:bg-slate-600"
+                            >
+                                Stop
+                            </button>
+                        )}
+                    </div>
+
+                    <div className="mt-6 grid grid-cols-1 md:grid-cols-5 gap-4">
+                        <div
+                            className="md:col-span-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5"
+                            onPointerDown={() => { if (view === 'clickSpeed' && clickPhase === 'running') setClickTestCount((c) => c + 1); }}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Tap / Click Pad</div>
+                                {clickPhase === 'running' && (
+                                    <div className="text-xs font-bold text-slate-500 dark:text-slate-400">{Math.ceil(clickTestRemainingSec)}s left</div>
+                                )}
+                            </div>
+                            <div className="mt-4 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 h-44 flex items-center justify-center select-none">
+                                {clickPhase === 'countdown' ? (
+                                    <div className="text-6xl font-black font-mono text-blue-600">{clickCountdown}</div>
+                                ) : clickPhase === 'running' ? (
+                                    <div className="text-xl font-black text-slate-800 dark:text-white">Go!</div>
+                                ) : (
+                                    <div className="text-sm font-bold text-slate-500 dark:text-slate-400">Press Start to begin</div>
+                                )}
+                            </div>
+                            <div className="mt-4 h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                                <div
+                                    className="h-2 bg-gradient-to-r from-blue-600 to-cyan-500"
+                                    style={{ width: `${clickPhase === 'running' && clickDurationMs ? Math.min(100, Math.max(0, (clickTestElapsedSec * 1000) / clickDurationMs * 100)) : 0}%` }}
+                                />
+                            </div>
+                        </div>
+
+                        <div className="md:col-span-2 grid grid-cols-2 gap-3">
+                            <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
+                                <div className="text-[10px] uppercase font-bold text-slate-400">Count</div>
+                                <div className="text-2xl font-black font-mono text-slate-800 dark:text-white">{clickTestCount}</div>
+                            </div>
+                            <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
+                                <div className="text-[10px] uppercase font-bold text-slate-400">CPS</div>
+                                <div className="text-2xl font-black font-mono text-slate-800 dark:text-white">{(clickPhase === 'running' ? clickPerSec : (clickLastCps ?? 0)).toFixed(2)}</div>
+                            </div>
+                            <div className="col-span-2 bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                                <div className="text-[10px] uppercase font-bold text-slate-400">Personal Best</div>
+                                <div className="mt-1 text-xl font-black font-mono text-blue-600">
+                                    {Number((localData.clickSpeed?.bestByDurationMs || {})[String(clickDurationMs)] || 0).toFixed(2)} CPS
+                                </div>
+                                {clickLastCps !== null && (
+                                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Last run: {clickLastCps.toFixed(2)} CPS</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="mt-6 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+                        <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Recent Runs</div>
+                        <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                            {(localData.clickSpeed?.recent || []).slice(0, 9).map((r) => (
+                                <div key={r.timestamp} className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400">{Math.round(r.durationMs / 1000)}s</div>
+                                    <div className="mt-1 text-lg font-black font-mono text-slate-800 dark:text-white">{r.cps.toFixed(2)} CPS</div>
+                                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Count: {r.count} · {new Date(r.timestamp).toLocaleString()}</div>
+                                </div>
+                            ))}
+                            {(localData.clickSpeed?.recent || []).length === 0 && (
+                                <div className="text-sm text-slate-500 dark:text-slate-400 italic">No click speed runs yet.</div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div className={view !== 'rankings' ? 'hidden' : ''}>
+                {/* RANKINGS VIEW */}
+                <div className="bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-700 rounded-xl p-6 md:p-8">
+                    <div className="max-w-3xl">
+                        <div className="text-xs font-bold uppercase tracking-widest text-slate-400">Global</div>
+                        <h2 className="text-2xl md:text-3xl font-black tracking-tight text-slate-900 dark:text-white mt-1">Rankings</h2>
+                        {!firebaseEnabled ? (
+                            <div className="mt-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5 text-sm text-slate-600 dark:text-slate-300">
+                                Firebase isn’t configured, so online rankings are disabled.
+                            </div>
+                        ) : (
+                            <>
+                                <div className="mt-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 p-5">
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <label className="flex items-center gap-2 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={Boolean(settings.leaderboard?.enabled)}
+                                                onChange={(e) => {
+                                                    bumpLocalUpdatedAt();
+                                                    const enabled = e.target.checked;
+                                                    setSettings((s) => ({
+                                                        ...s,
+                                                        leaderboard: {
+                                                            enabled,
+                                                            displayName: String(s.leaderboard?.displayName || 'User'),
+                                                        },
+                                                    }));
+                                                }}
+                                                className="accent-blue-500"
+                                            />
+                                            <span className="text-sm font-bold text-slate-800 dark:text-slate-200">Join rankings</span>
+                                        </label>
+
+                                        <div className="flex-1" />
+
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-bold text-slate-500 dark:text-slate-400">Public name</span>
+                                            <input
+                                                value={String(settings.leaderboard?.displayName || 'User')}
+                                                onChange={(e) => {
+                                                    const v = e.target.value.slice(0, 32);
+                                                    bumpLocalUpdatedAt();
+                                                    setSettings((s) => ({
+                                                        ...s,
+                                                        leaderboard: {
+                                                            enabled: Boolean(s.leaderboard?.enabled),
+                                                            displayName: v,
+                                                        },
+                                                    }));
+                                                }}
+                                                className="w-40 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm font-bold text-slate-800 dark:text-white outline-none"
+                                                placeholder="User"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {settings.leaderboard?.enabled && !user && (
+                                        <div className="mt-4 flex flex-wrap items-center gap-3">
+                                            <div className="text-xs text-slate-600 dark:text-slate-300">
+                                                Compete without creating an account: we’ll use an anonymous sign-in.
+                                            </div>
+                                            <button
+                                                onClick={() =>
+                                                    void (async () => {
+                                                        try {
+                                                            const { signInAnonymouslyIfNeeded } = await loadAuthService();
+                                                            await signInAnonymouslyIfNeeded();
+                                                        } catch (e) {
+                                                            console.error(e);
+                                                        }
+                                                    })()
+                                                }
+                                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700"
+                                            >
+                                                Join anonymously
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-4 flex flex-wrap items-center gap-2">
+                                    {(['classic', 'backwards', 'spaces', 'backwards-spaces', 'guinness'] as GameMode[]).map((m) => (
+                                        <button
+                                            key={m}
+                                            onClick={() => setRankingsMode(m)}
+                                            className={`px-4 py-2 rounded-lg text-xs font-bold border transition ${rankingsMode === m ? 'bg-blue-600 text-white border-blue-700' : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700'}`}
+                                        >
+                                            {modeLabel(m)}
+                                        </button>
+                                    ))}
+                                    <div className="flex-1" />
+                                    <button
+                                        onClick={() => void refreshRankings()}
+                                        className="bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 px-4 py-2 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-600"
+                                        disabled={rankingsLoading}
+                                    >
+                                        {rankingsLoading ? 'Refreshing…' : 'Refresh'}
+                                    </button>
+                                </div>
+
+                                {rankingsError && <div className="mt-3 text-sm text-red-600 dark:text-red-400">{rankingsError}</div>}
+
+                                <div className="mt-4 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+                                    <table className="w-full text-left">
+                                        <thead className="bg-slate-50 dark:bg-slate-900/40">
+                                            <tr>
+                                                <th className="px-4 py-3 text-[10px] uppercase font-black tracking-widest text-slate-400">Rank</th>
+                                                <th className="px-4 py-3 text-[10px] uppercase font-black tracking-widest text-slate-400">Name</th>
+                                                <th className="px-4 py-3 text-[10px] uppercase font-black tracking-widest text-slate-400">Best</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {rankingsTop.map((e, idx) => (
+                                                <tr
+                                                    key={e.uid}
+                                                    className={`border-t border-slate-200 dark:border-slate-800 ${user?.uid === e.uid ? 'bg-amber-50 dark:bg-amber-900/20' : ''}`}
+                                                >
+                                                    <td className="px-4 py-3 text-sm font-black font-mono text-slate-700 dark:text-slate-200">#{idx + 1}</td>
+                                                    <td className="px-4 py-3 text-sm font-bold text-slate-800 dark:text-white">{e.displayName || 'User'}</td>
+                                                    <td className="px-4 py-3 text-sm font-black font-mono text-blue-600">{Number(e.bestTime).toFixed(2)}s</td>
+                                                </tr>
+                                            ))}
+                                            {rankingsTop.length === 0 && !rankingsLoading && (
+                                                <tr>
+                                                    <td colSpan={3} className="px-4 py-6 text-sm text-slate-500 dark:text-slate-400 italic">
+                                                        No entries yet.
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div className="mt-6 bg-slate-50 dark:bg-slate-900/40 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <div className="text-sm font-black text-slate-800 dark:text-white">World Record Benchmarks</div>
+                                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Used for confetti. Add a source link if you have one.</div>
+
+                                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        {MODE_RECORD_ORDER.map((m) => {
+                                            const v = settings.worldRecords?.[m];
+                                            const value = typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
+                                            const link = String(settings.worldRecordLinks?.[m] || '');
+                                            return (
+                                                <div key={m} className="rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 p-3">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <div className="text-xs font-bold text-slate-600 dark:text-slate-300">{modeLabel(m)}</div>
+                                                        <input
+                                                            type="number"
+                                                            inputMode="decimal"
+                                                            min={0}
+                                                            step={0.01}
+                                                            placeholder="—"
+                                                            value={value}
+                                                            onChange={(e) => {
+                                                                const raw = e.target.value;
+                                                                bumpLocalUpdatedAt();
+                                                                setSettings((s) => {
+                                                                    const next: Settings = { ...s, worldRecords: { ...(s.worldRecords || {}) } };
+                                                                    if (!raw.trim()) {
+                                                                        delete (next.worldRecords as any)[m];
+                                                                        return next;
+                                                                    }
+                                                                    const num = Number(raw);
+                                                                    if (!Number.isFinite(num) || num <= 0) {
+                                                                        delete (next.worldRecords as any)[m];
+                                                                        return next;
+                                                                    }
+                                                                    (next.worldRecords as any)[m] = num;
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                            className="w-28 bg-transparent text-right font-mono text-sm font-bold text-slate-800 dark:text-white outline-none"
+                                                        />
+                                                    </div>
+                                                    <div className="mt-2 flex items-center gap-2">
+                                                        <input
+                                                            value={link}
+                                                            onChange={(e) => {
+                                                                const raw = e.target.value;
+                                                                bumpLocalUpdatedAt();
+                                                                setSettings((s) => {
+                                                                    const next: Settings = { ...s, worldRecordLinks: { ...(s.worldRecordLinks || {}) } };
+                                                                    if (!raw.trim()) {
+                                                                        delete (next.worldRecordLinks as any)[m];
+                                                                        return next;
+                                                                    }
+                                                                    (next.worldRecordLinks as any)[m] = raw.trim();
+                                                                    return next;
+                                                                });
+                                                            }}
+                                                            placeholder="Source URL (optional)"
+                                                            className="flex-1 bg-transparent border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-700 dark:text-slate-200 outline-none"
+                                                        />
+                                                        <button
+                                                            onClick={() => link && window.open(link, '_blank', 'noreferrer')}
+                                                            disabled={!link}
+                                                            className="bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-600 disabled:opacity-50"
+                                                        >
+                                                            Open
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
             </div>
             <div className={view !== 'fingerPatterns' ? 'hidden' : ''}>
                 {/* FINGER PATTERN PRACTICE VIEW */}
@@ -2862,7 +3351,7 @@ const App: React.FC = () => {
 
                     <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
-                            <div className="text-[10px] uppercase font-bold text-slate-400">Xiaoyu's Best</div>
+                            <div className="text-[10px] uppercase font-bold text-slate-400">Featured Best</div>
                             <div className="text-3xl font-black text-blue-500 font-mono">1.21s</div>
                         </div>
                         <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
@@ -2876,91 +3365,6 @@ const App: React.FC = () => {
                     </div>
 
                     <div className="mt-8 space-y-4">
-                        <div className="bg-slate-50 dark:bg-slate-850 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
-                            <div className="flex items-center justify-between gap-3">
-                                <div>
-                                    <div className="text-sm font-black text-slate-800 dark:text-white">Click Speed Test</div>
-                                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">10 seconds · click/tap/press keys anywhere</div>
-                                </div>
-                                <div className="flex gap-2">
-                                    {!clickTestActive ? (
-                                        <button
-                                            onClick={startClickTest}
-                                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700"
-                                        >
-                                            Start
-                                        </button>
-                                    ) : (
-                                        <button
-                                            onClick={stopClickTest}
-                                            className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-100 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-600"
-                                        >
-                                            Stop
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-
-                            <div className="mt-4 grid grid-cols-3 gap-3">
-                                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
-                                    <div className="text-[10px] uppercase font-bold text-slate-400">Remaining</div>
-                                    <div className="text-xl font-black font-mono text-slate-800 dark:text-white">{clickTestActive ? Math.ceil(clickTestRemainingSec) : '—'}s</div>
-                                </div>
-                                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
-                                    <div className="text-[10px] uppercase font-bold text-slate-400">Count</div>
-                                    <div className="text-xl font-black font-mono text-slate-800 dark:text-white">{clickTestCount}</div>
-                                </div>
-                                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
-                                    <div className="text-[10px] uppercase font-bold text-slate-400">Per Sec</div>
-                                    <div className="text-xl font-black font-mono text-slate-800 dark:text-white">{clickPerSec ? clickPerSec.toFixed(2) : '0.00'}</div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="bg-slate-50 dark:bg-slate-850 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
-                            <div className="text-sm font-black text-slate-800 dark:text-white">World Record Benchmarks</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Beat one and you’ll get confetti. Leave blank to disable.</div>
-
-                            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                {MODE_RECORD_ORDER.map((m) => {
-                                    const v = settings.worldRecords?.[m];
-                                    const value = typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
-                                    return (
-                                        <div key={m} className="flex items-center justify-between gap-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2">
-                                            <div className="text-xs font-bold text-slate-600 dark:text-slate-300">{modeLabel(m)}</div>
-                                            <input
-                                                type="number"
-                                                inputMode="decimal"
-                                                min={0}
-                                                step={0.01}
-                                                placeholder="—"
-                                                value={value}
-                                                onChange={(e) => {
-                                                    const raw = e.target.value;
-                                                    bumpLocalUpdatedAt();
-                                                    setSettings((s) => {
-                                                        const next: Settings = { ...s, worldRecords: { ...(s.worldRecords || {}) } };
-                                                        if (!raw.trim()) {
-                                                            delete (next.worldRecords as any)[m];
-                                                            return next;
-                                                        }
-                                                        const num = Number(raw);
-                                                        if (!Number.isFinite(num) || num <= 0) {
-                                                            delete (next.worldRecords as any)[m];
-                                                            return next;
-                                                        }
-                                                        (next.worldRecords as any)[m] = num;
-                                                        return next;
-                                                    });
-                                                }}
-                                                className="w-28 bg-transparent text-right font-mono text-sm font-bold text-slate-800 dark:text-white outline-none"
-                                            />
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-
                         <div className="bg-slate-50 dark:bg-slate-850 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
                             <div className="text-sm font-black text-slate-800 dark:text-white">Donation Jar</div>
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Support development (optional).</div>
@@ -3052,6 +3456,35 @@ const App: React.FC = () => {
                                     {syncError && (
                                         <div className="mt-3 text-sm text-red-600 dark:text-red-400">{syncError}</div>
                                     )}
+
+                                    <div className="mt-5">
+                                        <div className="text-[10px] uppercase font-bold text-slate-400">Badges</div>
+                                        {!settings.leaderboard?.enabled ? (
+                                            <div className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                                                Enable <span className="font-bold">Join rankings</span> in the <span className="font-bold">Rankings</span> tab to earn global badges.
+                                            </div>
+                                        ) : (
+                                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                {(['classic', 'backwards', 'spaces', 'backwards-spaces', 'guinness'] as GameMode[]).map((m) => {
+                                                    const r = badgeRanks[m];
+                                                    const label = r === 1 ? '🏆 #1' : (r && r <= 10 ? 'Top 10' : (r && r <= 100 ? 'Top 100' : null));
+                                                    return (
+                                                        <div key={m} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4">
+                                                            <div className="text-[10px] uppercase font-bold text-slate-400">{modeLabel(m)}</div>
+                                                            <div className="mt-1 text-sm font-black text-slate-800 dark:text-white">
+                                                                {label ? label : '—'}
+                                                            </div>
+                                                            {r ? (
+                                                                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Rank #{r} (Top 100)</div>
+                                                            ) : (
+                                                                <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Not in Top 100</div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <div className="flex flex-wrap gap-2">

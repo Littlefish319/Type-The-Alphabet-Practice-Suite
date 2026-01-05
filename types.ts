@@ -1,6 +1,6 @@
 
 export type GameMode = 'classic' | 'blank' | 'flash' | 'guinness' | 'backwards' | 'spaces' | 'backwards-spaces';
-export type View = 'practice' | 'fingerPatterns' | 'analytics' | 'history' | 'about' | 'account';
+export type View = 'practice' | 'clickSpeed' | 'rankings' | 'fingerPatterns' | 'analytics' | 'history' | 'about' | 'account';
 
 export type FingerCode = string;
 
@@ -84,6 +84,12 @@ export interface LocalData {
     // Custom rhythm patterns
     rhythmPatterns?: RhythmPattern[];
     selectedRhythmPatternId?: string | null;
+
+    // Click speed test
+    clickSpeed?: {
+        bestByDurationMs: Record<string, number>; // durationMs -> best CPS
+        recent: Array<{ durationMs: number; count: number; cps: number; timestamp: number }>;
+    };
 }
 
 export interface Settings {
@@ -96,6 +102,14 @@ export interface Settings {
 
     // Optional user-configured benchmarks for quick comparison.
     worldRecords?: Partial<Record<GameMode, number>>;
+
+    // Optional source links for the benchmarks above.
+    worldRecordLinks?: Partial<Record<GameMode, string>>;
+
+    leaderboard?: {
+        enabled: boolean;
+        displayName: string;
+    };
 }
 
 export interface GameState {
