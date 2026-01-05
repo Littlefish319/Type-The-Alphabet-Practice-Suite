@@ -54,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
     blind: false,
     voice: false,
     sound: true,
+    worldRecords: {},
     specializedPractice: {
         enabled: false,
         start: 'a',

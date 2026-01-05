@@ -93,6 +93,9 @@ export interface Settings {
     sound: boolean;
 
     specializedPractice: SpecializedPracticeSettings;
+
+    // Optional user-configured benchmarks for quick comparison.
+    worldRecords?: Partial<Record<GameMode, number>>;
 }
 
 export interface GameState {

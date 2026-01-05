@@ -84,6 +84,58 @@ const modeLabel = (mode: GameMode): string => {
 
 // --- HELPER COMPONENTS ---
 
+type ConfettiPiece = { id: number; leftPct: number; delayMs: number; durationMs: number; rotateDeg: number; colorClass: string };
+
+const ConfettiBurst: React.FC<{ seed: number }> = ({ seed }) => {
+    const pieces = useMemo<ConfettiPiece[]>(() => {
+        // Deterministic-ish based on seed; keep it lightweight.
+        let x = seed || 1;
+        const rand = () => {
+            x = (x * 1664525 + 1013904223) >>> 0;
+            return x / 0xffffffff;
+        };
+
+        const colors = ['bg-blue-500', 'bg-cyan-400', 'bg-indigo-500', 'bg-emerald-400'];
+        const out: ConfettiPiece[] = [];
+        for (let i = 0; i < 28; i += 1) {
+            out.push({
+                id: i,
+                leftPct: 10 + rand() * 80,
+                delayMs: Math.floor(rand() * 120),
+                durationMs: 650 + Math.floor(rand() * 500),
+                rotateDeg: Math.floor(rand() * 360),
+                colorClass: colors[Math.floor(rand() * colors.length)] || 'bg-blue-500',
+            });
+        }
+        return out;
+    }, [seed]);
+
+    return (
+        <div className="pointer-events-none fixed inset-0 z-[9999] overflow-hidden">
+            <style>{`
+                @keyframes confetti-fall {
+                    0% { transform: translate3d(-50%, -20px, 0) rotate(var(--rot)); opacity: 1; }
+                    100% { transform: translate3d(calc(-50% + var(--drift)), 110vh, 0) rotate(calc(var(--rot) + 240deg)); opacity: 0; }
+                }
+            `}</style>
+            {pieces.map((p) => (
+                <div
+                    key={p.id}
+                    className={`absolute top-0 h-2 w-1.5 rounded-sm ${p.colorClass}`}
+                    style={
+                        {
+                            left: `${p.leftPct}%`,
+                            animation: `confetti-fall ${p.durationMs}ms ease-out ${p.delayMs}ms 1 forwards`,
+                            ['--rot' as any]: `${p.rotateDeg}deg`,
+                            ['--drift' as any]: `${(p.leftPct - 50) * 2}px`,
+                        } as any
+                    }
+                />
+            ))}
+        </div>
+    );
+};
+
 interface LetterBoxProps {
     data: FingeringDataItem;
     index: number;
@@ -133,6 +185,9 @@ const App: React.FC = () => {
 
     const [countdown, setCountdown] = useState<string | null>(null);
     const [flashEffect, setFlashEffect] = useState(false);
+
+    const [confettiSeed, setConfettiSeed] = useState<number>(0);
+    const confettiTimerRef = useRef<number | null>(null);
 
     const [deviceIdentity, setDeviceIdentity] = useState<DeviceIdentity | null>(null);
 
@@ -277,6 +332,7 @@ const App: React.FC = () => {
     }, []);
 
     const isAiAvailable = Boolean(import.meta.env.VITE_GEMINI_API_KEY);
+    const donationUrl = (import.meta as any)?.env?.VITE_DONATION_URL as string | undefined;
 
     const canUseOAuthOnThisPlatform = useMemo(() => {
         try {
@@ -435,6 +491,10 @@ const App: React.FC = () => {
                     parsed.settings.sound = true;
                 }
 
+                if (parsed.settings && !parsed.settings.worldRecords) {
+                    parsed.settings.worldRecords = {};
+                }
+
                 if (parsed.settings && !parsed.settings.specializedPractice) {
                     parsed.settings.specializedPractice = DEFAULT_SETTINGS.specializedPractice;
                 }
@@ -454,6 +514,21 @@ const App: React.FC = () => {
             console.error("Failed to load data from localStorage", e);
         }
     }, [migrateLegacyProfileDeviceNames]);
+
+    useEffect(() => {
+        return () => {
+            if (confettiTimerRef.current) window.clearTimeout(confettiTimerRef.current);
+        };
+    }, []);
+
+    const burstConfetti = useCallback(() => {
+        setConfettiSeed((s) => {
+            const next = (s || 0) + 1;
+            return next;
+        });
+        if (confettiTimerRef.current) window.clearTimeout(confettiTimerRef.current);
+        confettiTimerRef.current = window.setTimeout(() => setConfettiSeed(0), 1300);
+    }, []);
 
     useEffect(() => {
         try {
@@ -519,7 +594,12 @@ const App: React.FC = () => {
             history: ensureRunIds(env.localData.history || []),
         });
         setLocalData(migratedLocalData);
-        setSettings(env.settings);
+        const nextSettings: Settings = {
+            ...DEFAULT_SETTINGS,
+            ...env.settings,
+            worldRecords: env.settings?.worldRecords ?? {},
+        };
+        setSettings(nextSettings);
 
         if (typeof env.ui?.professionalMode === 'boolean') {
             setProfessionalMode(env.ui.professionalMode);
@@ -900,6 +980,32 @@ const App: React.FC = () => {
         setCompletedRun(newRun);
         setPostRunAnalysis(generatePostRunAnalysis(newRun, localData.history));
 
+        // Confetti on personal best and/or world record.
+        try {
+            const isSpecial = Boolean(specializedPractice?.enabled);
+            const relevantHistory = localData.history.filter(r => {
+                if (r.profile !== newRun.profile) return false;
+                if (r.device !== newRun.device) return false;
+                if (r.mode !== newRun.mode) return false;
+                if (isSpecial) {
+                    if (!r.specialized?.enabled) return false;
+                    return (
+                        (r.specialized.start || 'a').toLowerCase() === (specializedPractice.start || 'a').toLowerCase() &&
+                        (r.specialized.end || 'z').toLowerCase() === (specializedPractice.end || 'z').toLowerCase()
+                    );
+                }
+                return !r.specialized?.enabled;
+            });
+
+            const best = relevantHistory.reduce((m, r) => Math.min(m, r.time), Infinity);
+            const isPersonalBest = finalTime < best;
+            const worldRecord = settings.worldRecords?.[newRun.mode];
+            const beatsWorldRecord = typeof worldRecord === 'number' && finalTime < worldRecord;
+            if (isPersonalBest || beatsWorldRecord) burstConfetti();
+        } catch {
+            // ignore
+        }
+
         if (settings.mode === 'guinness') {
             setFlashEffect(true);
             setTimeout(() => setFlashEffect(false), 500);
@@ -913,7 +1019,68 @@ const App: React.FC = () => {
         blurTypingInputs();
         
         setResultsModalOpen(true);
-    }, [blurTypingInputs, deviceIdentity?.deviceId, deviceIdentity?.deviceLabel, deviceIdentity?.platform, gameState.mistakeLog, gameState.mistakes, generatePostRunAnalysis, localData.currentDevice, localData.currentProfile, localData.history, settings.blind, settings.mode, settings.sound, settings.voice, specializedPractice]);
+    }, [blurTypingInputs, burstConfetti, deviceIdentity?.deviceId, deviceIdentity?.deviceLabel, deviceIdentity?.platform, gameState.mistakeLog, gameState.mistakes, generatePostRunAnalysis, localData.currentDevice, localData.currentProfile, localData.history, settings.blind, settings.mode, settings.sound, settings.voice, settings.worldRecords, specializedPractice]);
+
+    // --- ABOUT: CLICK SPEED TEST ---
+    const [clickTestActive, setClickTestActive] = useState(false);
+    const [clickTestStartedAt, setClickTestStartedAt] = useState<number | null>(null);
+    const [clickTestEndsAt, setClickTestEndsAt] = useState<number | null>(null);
+    const [clickTestCount, setClickTestCount] = useState(0);
+    const [clickTestNow, setClickTestNow] = useState(Date.now());
+
+    const CLICK_TEST_MS = 10_000;
+
+    const startClickTest = useCallback(() => {
+        const now = Date.now();
+        setClickTestCount(0);
+        setClickTestStartedAt(now);
+        setClickTestEndsAt(now + CLICK_TEST_MS);
+        setClickTestActive(true);
+    }, []);
+
+    const stopClickTest = useCallback(() => {
+        setClickTestActive(false);
+    }, []);
+
+    useEffect(() => {
+        if (!clickTestActive) return;
+
+        const onHit = () => {
+            const now = Date.now();
+            if (clickTestEndsAt && now >= clickTestEndsAt) {
+                setClickTestActive(false);
+                return;
+            }
+            setClickTestCount((c) => c + 1);
+        };
+
+        const onPointerDown = () => onHit();
+        const onKeyDown = (e: KeyboardEvent) => {
+            // Count any key.
+            if (e.repeat) return;
+            onHit();
+        };
+
+        window.addEventListener('pointerdown', onPointerDown, { passive: true });
+        window.addEventListener('keydown', onKeyDown);
+
+        const t = window.setInterval(() => {
+            setClickTestNow(Date.now());
+            if (clickTestEndsAt && Date.now() >= clickTestEndsAt) {
+                setClickTestActive(false);
+            }
+        }, 50);
+
+        return () => {
+            window.removeEventListener('pointerdown', onPointerDown as any);
+            window.removeEventListener('keydown', onKeyDown as any);
+            window.clearInterval(t);
+        };
+    }, [clickTestActive, clickTestEndsAt]);
+
+    const clickTestElapsedSec = clickTestStartedAt ? Math.max(0, (Math.min(clickTestNow, clickTestEndsAt || clickTestNow) - clickTestStartedAt) / 1000) : 0;
+    const clickTestRemainingSec = clickTestEndsAt ? Math.max(0, (clickTestEndsAt - clickTestNow) / 1000) : 0;
+    const clickPerSec = clickTestElapsedSec > 0 ? clickTestCount / clickTestElapsedSec : 0;
 
 
     // --- EVENT HANDLERS ---
@@ -1656,6 +1823,7 @@ const App: React.FC = () => {
     return (
         <>
         {flashEffect && <div id="flash-overlay" className="fixed inset-0 z-[100] animate-flash"></div>}
+        {confettiSeed ? <ConfettiBurst seed={confettiSeed} /> : null}
 
         {showSplash && (
             <div
@@ -2704,6 +2872,110 @@ const App: React.FC = () => {
                         <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-xl border border-slate-200 dark:border-slate-700 text-center">
                             <div className="text-[10px] uppercase font-bold text-slate-400">Keys/Sec</div>
                             <div className="text-2xl font-black text-slate-800 dark:text-white font-mono">21.48 KPS</div>
+                        </div>
+                    </div>
+
+                    <div className="mt-8 space-y-4">
+                        <div className="bg-slate-50 dark:bg-slate-850 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <div className="text-sm font-black text-slate-800 dark:text-white">Click Speed Test</div>
+                                    <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">10 seconds · click/tap/press keys anywhere</div>
+                                </div>
+                                <div className="flex gap-2">
+                                    {!clickTestActive ? (
+                                        <button
+                                            onClick={startClickTest}
+                                            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-xs font-bold hover:bg-blue-700"
+                                        >
+                                            Start
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={stopClickTest}
+                                            className="bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-100 px-3 py-2 rounded-lg text-xs font-bold hover:bg-slate-300 dark:hover:bg-slate-600"
+                                        >
+                                            Stop
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-3 gap-3">
+                                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400">Remaining</div>
+                                    <div className="text-xl font-black font-mono text-slate-800 dark:text-white">{clickTestActive ? Math.ceil(clickTestRemainingSec) : '—'}s</div>
+                                </div>
+                                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400">Count</div>
+                                    <div className="text-xl font-black font-mono text-slate-800 dark:text-white">{clickTestCount}</div>
+                                </div>
+                                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-center">
+                                    <div className="text-[10px] uppercase font-bold text-slate-400">Per Sec</div>
+                                    <div className="text-xl font-black font-mono text-slate-800 dark:text-white">{clickPerSec ? clickPerSec.toFixed(2) : '0.00'}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-850 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="text-sm font-black text-slate-800 dark:text-white">World Record Benchmarks</div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Beat one and you’ll get confetti. Leave blank to disable.</div>
+
+                            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {MODE_RECORD_ORDER.map((m) => {
+                                    const v = settings.worldRecords?.[m];
+                                    const value = typeof v === 'number' && Number.isFinite(v) ? String(v) : '';
+                                    return (
+                                        <div key={m} className="flex items-center justify-between gap-3 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 px-3 py-2">
+                                            <div className="text-xs font-bold text-slate-600 dark:text-slate-300">{modeLabel(m)}</div>
+                                            <input
+                                                type="number"
+                                                inputMode="decimal"
+                                                min={0}
+                                                step={0.01}
+                                                placeholder="—"
+                                                value={value}
+                                                onChange={(e) => {
+                                                    const raw = e.target.value;
+                                                    bumpLocalUpdatedAt();
+                                                    setSettings((s) => {
+                                                        const next: Settings = { ...s, worldRecords: { ...(s.worldRecords || {}) } };
+                                                        if (!raw.trim()) {
+                                                            delete (next.worldRecords as any)[m];
+                                                            return next;
+                                                        }
+                                                        const num = Number(raw);
+                                                        if (!Number.isFinite(num) || num <= 0) {
+                                                            delete (next.worldRecords as any)[m];
+                                                            return next;
+                                                        }
+                                                        (next.worldRecords as any)[m] = num;
+                                                        return next;
+                                                    });
+                                                }}
+                                                className="w-28 bg-transparent text-right font-mono text-sm font-bold text-slate-800 dark:text-white outline-none"
+                                            />
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        <div className="bg-slate-50 dark:bg-slate-850 p-5 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="text-sm font-black text-slate-800 dark:text-white">Donation Jar</div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Support development (optional).</div>
+                            <div className="mt-4 flex items-center gap-3">
+                                <button
+                                    onClick={() => donationUrl && window.open(donationUrl, '_blank', 'noreferrer')}
+                                    disabled={!donationUrl}
+                                    className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 disabled:bg-blue-400"
+                                >
+                                    Donate
+                                </button>
+                                <div className="text-xs text-slate-500 dark:text-slate-400 break-all">
+                                    {donationUrl ? donationUrl : 'Set VITE_DONATION_URL to enable.'}
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
